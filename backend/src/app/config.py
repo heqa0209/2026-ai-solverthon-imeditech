@@ -34,6 +34,11 @@ class Settings(BaseSettings):
             raise ValueError("APP_TIMEZONE must be Asia/Seoul")
         return value
 
+    @field_validator("source_storage_root", "demo_fixture_root")
+    @classmethod
+    def resolve_repository_path(cls, value: Path) -> Path:
+        return value if value.is_absolute() else (REPO_ROOT / value).resolve()
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

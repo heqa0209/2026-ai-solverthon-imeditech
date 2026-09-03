@@ -16,8 +16,7 @@ class DailyStopDetector:
 
     def observe(self, page: BizinfoPage) -> bool:
         all_old = bool(page.items) and all(
-            item.published_on is not None
-            and item.published_on < self.last_success_at.date()
+            item.published_on is not None and item.published_on < self.last_success_at.date()
             for item in page.items
         )
         all_unchanged = bool(page.items) and all(

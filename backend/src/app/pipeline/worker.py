@@ -67,9 +67,7 @@ class Worker:
 
     async def ensure_ready(self) -> None:
         if self.isolation_check is None:
-            await self.queue.record_worker_heartbeat(
-                worker_id=self.worker_id, isolation_ok=False
-            )
+            await self.queue.record_worker_heartbeat(worker_id=self.worker_id, isolation_ok=False)
             raise RuntimeError("Worker isolation self-test is not configured")
         self._isolation_ok = await self.isolation_check()
         await self.queue.record_worker_heartbeat(
@@ -154,9 +152,7 @@ class Worker:
         if not self._isolation_ok:
             await self.ensure_ready()
         else:
-            await self.queue.record_worker_heartbeat(
-                worker_id=self.worker_id, isolation_ok=True
-            )
+            await self.queue.record_worker_heartbeat(worker_id=self.worker_id, isolation_ok=True)
         claimed: list[Job] = []
         while len(claimed) < self.concurrency:
             job = await self.queue.claim(owner=self.worker_id)

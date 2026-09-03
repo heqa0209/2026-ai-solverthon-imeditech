@@ -31,7 +31,7 @@ def run_filesystem_isolation_self_test(policy: FilesystemIsolationPolicy) -> boo
                 with path.open("rb"):
                     pass
             return False
-        except (PermissionError, FileNotFoundError):
+        except PermissionError, FileNotFoundError:
             pass
     try:
         policy.forbidden_write_path.write_text("probe", encoding="utf-8")

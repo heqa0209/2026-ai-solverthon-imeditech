@@ -104,8 +104,7 @@ def test_generated_ir_schema_closes_every_object() -> None:
 
 def test_fixed_stage_models_and_efforts_match_contract() -> None:
     actual = [
-        (stage.value, policy.model, policy.effort)
-        for stage, policy in AI_STAGE_POLICIES.items()
+        (stage.value, policy.model, policy.effort) for stage, policy in AI_STAGE_POLICIES.items()
     ]
     assert actual == [
         ("ATTACHMENT_SELECTION", "gpt-5.6-luna", "low"),

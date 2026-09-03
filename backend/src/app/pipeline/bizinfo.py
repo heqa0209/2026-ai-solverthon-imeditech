@@ -135,7 +135,7 @@ def _attachments(item: dict[str, Any]) -> tuple[AttachmentMetadata, ...]:
         size = _first(entry, "size", "sizeBytes", "fileSize")
         try:
             parsed_size = int(size) if size not in (None, "") else None
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             parsed_size = None
         result.append(AttachmentMetadata(name, url, parsed_size, index))
     return tuple(result)
@@ -173,7 +173,7 @@ def parse_bizinfo_page(payload: dict[str, Any], *, page_index: int, page_unit: i
     total = _first(payload, "totalCount", "totCnt")
     try:
         total_count = int(total) if total not in (None, "") else None
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         total_count = None
     return BizinfoPage(
         items=tuple(parsed),

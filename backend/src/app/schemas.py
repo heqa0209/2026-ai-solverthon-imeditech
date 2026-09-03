@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from enum import StrEnum
 from typing import Annotated, Literal
+from unicodedata import normalize
 
 from pydantic import (
     BaseModel,
@@ -13,9 +14,16 @@ from pydantic import (
     model_validator,
 )
 
-from app.enums import DecisionFreshness, InterestStatus, Verdict
+from app.enums import (
+    ConditionStatus,
+    DecisionFreshness,
+    DownloadStatus,
+    ExtractionStatus,
+    InterestStatus,
+    Verdict,
+)
 
-Trimmed = Annotated[str, StringConstraints(strip_whitespace=True)]
+Trimmed = Annotated[str, StringConstraints(strip_whitespace=True, max_length=100)]
 
 
 class StrictModel(BaseModel):
@@ -109,11 +117,36 @@ class CompanyProfileInput(StrictModel):
             seen: set[str] = set()
             normalized: list[str] = []
             for value in values:
-                folded = " ".join(value.split()).casefold()
+                folded = normalize("NFKC", " ".join(value.split())).casefold()
                 if folded and folded not in seen:
                     seen.add(folded)
                     normalized.append(" ".join(value.split()))
             setattr(self, name, normalized)
+        return self
+
+    @field_validator("primaryIndustry")
+    @classmethod
+    def blank_primary_industry_is_null(cls, value: str | None) -> str | None:
+        return value or None
+
+    @model_validator(mode="after")
+    def normalize_regions_and_history(self) -> CompanyProfileInput:
+        region_seen: set[str] = set()
+        regions: list[RegionInput] = []
+        for region in self.eligibleRegions:
+            if region.code not in region_seen:
+                region_seen.add(region.code)
+                regions.append(region)
+        self.eligibleRegions = regions
+
+        history_seen: set[tuple[str, int]] = set()
+        history: list[SupportHistoryInput] = []
+        for item in self.supportHistory:
+            key = (normalize("NFKC", " ".join(item.programName.split())).casefold(), item.year)
+            if key not in history_seen:
+                history_seen.add(key)
+                history.append(item)
+        self.supportHistory = history
         return self
 
 
@@ -190,3 +223,128 @@ class ReadinessCheck(StrictModel):
 class ReadinessResponse(StrictModel):
     status: Literal["ok", "error"]
     checks: dict[str, ReadinessCheck]
+
+
+class LoginInput(StrictModel):
+    username: str
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class CompanyVersionItem(StrictModel):
+    id: str
+    version: int
+    profile: CompanyProfileInput
+    createdAt: datetime
+
+
+class CompanyVersionsResponse(StrictModel):
+    items: list[CompanyVersionItem]
+
+
+class RegionItem(StrictModel):
+    code: str
+    name: str
+    parentCode: str | None
+    parentName: str | None
+    level: Literal["SIDO", "SIGUNGU"]
+
+
+class RegionSearchResponse(StrictModel):
+    items: list[RegionItem]
+
+
+class RoleInput(StrictModel):
+    announcementVersionId: str
+    roleKey: Annotated[str | None, StringConstraints(strip_whitespace=True, max_length=100)]
+
+
+class AnswerInput(StrictModel):
+    announcementVersionId: str
+    conditionId: str
+    value: str | int | bool | list[str] | dict[str, object]
+    source: Literal["USER_VERIFIED", "OFFICIAL_DOCUMENT", "AGENCY_INQUIRY"]
+    memo: Annotated[str | None, StringConstraints(strip_whitespace=True, max_length=1000)] = None
+
+
+class ReevaluateInput(StrictModel):
+    announcementVersionId: str
+
+
+class EvidenceView(StrictModel):
+    sourceFileId: str | None = None
+    sourceVersion: str | None = None
+    sourceName: str | None = None
+    page: int | None = None
+    verbatimText: str
+    sourcePriority: int | None = None
+
+
+class ConditionResultView(StrictModel):
+    id: str
+    conditionKey: str
+    groupKey: str
+    trackKey: str | None
+    roleKey: str | None
+    kind: str
+    subject: str
+    operator: str
+    expectedValue: dict[str, object] | None
+    unit: str | None
+    referenceDate: date | None
+    status: ConditionStatus
+    usedValue: dict[str, object] | None
+    explanation: str | None
+    assumptionCode: str | None
+    evidence: list[EvidenceView]
+
+
+class QuestionView(StrictModel):
+    conditionId: str
+    prompt: str
+    valueType: str
+    options: list[str] | None = None
+    unit: str | None = None
+    evidence: list[EvidenceView] = Field(default_factory=list)
+
+
+class SourceFileView(StrictModel):
+    id: str
+    name: str
+    sourceUrl: str
+    sizeBytes: int | None
+    mimeType: str | None
+    sourceOrder: int
+    downloadStatus: DownloadStatus
+    extractionStatus: ExtractionStatus
+    failureCode: str | None
+
+
+class RolePredictionView(StrictModel):
+    roleKey: str
+    label: str
+    eligibility: Verdict | None = None
+
+
+class AnnouncementDetail(AnnouncementListItem):
+    sourceUrl: str
+    publishedOn: date | None
+    summary: str | None
+    explanation: str | None
+    passedTrackKey: str | None
+    selectedRoleKey: str | None
+    rolePredictions: list[RolePredictionView]
+    conditions: list[ConditionResultView]
+    questions: list[QuestionView]
+    files: list[SourceFileView]
+
+
+class ErrorDetail(StrictModel):
+    location: list[str | int]
+    reason: str
+
+
+class ErrorResponse(StrictModel):
+    code: str
+    message: str
+    details: list[ErrorDetail]
+    requestId: str

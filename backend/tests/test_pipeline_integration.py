@@ -93,6 +93,13 @@ def test_fixture_loader_persists_traceable_inputs_and_publishes_decision(
         assert first.decisions_published == 1
 
         async with session_factory.begin() as db:
+            source = await db.get(SourceFile, "demo-2026-001-body")
+            assert source is not None and source.storage_path is not None
+            stored_path = tmp_path / "sources" / source.storage_path
+            source.storage_path = None
+        stored_path.unlink()
+
+        async with session_factory.begin() as db:
             second = await persist_demo_fixture(
                 db, MANIFEST, source_storage_root=tmp_path / "sources"
             )
@@ -116,6 +123,8 @@ def test_fixture_loader_persists_traceable_inputs_and_publishes_decision(
             )
             assert announcement.current_version_id == first.announcement_version_id
             assert analysis.status == "SUCCEEDED"
+            assert source.storage_path is not None
+            assert (tmp_path / "sources" / source.storage_path).is_file()
             assert source.extracted_text and "지원 대상은 소기업" in source.extracted_text
             assert condition.evidence[0]["source_file_id"] == source.id
             assert decision.published_verdict == "ELIGIBLE"

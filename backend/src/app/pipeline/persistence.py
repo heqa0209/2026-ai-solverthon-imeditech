@@ -28,6 +28,7 @@ from app.pipeline.fixtures import (
     load_fixture_manifest,
     load_wrapper,
 )
+from app.pipeline.hashing import sha256_bytes
 from app.pipeline.ir import CanonicalIR, EvidenceSource, validate_evidence
 
 
@@ -68,6 +69,30 @@ def _source_text(manifest_path: Path, source: FixtureFile) -> tuple[str, str | N
     return extraction.text, None if extraction.text else "FIXTURE_OCR_REQUIRED"
 
 
+def _store_fixture_source(
+    source_path: Path,
+    *,
+    source: FixtureFile,
+    version: AnnouncementVersion,
+    source_storage_root: Path,
+) -> str | None:
+    if source.expected_extraction == "LIMIT_EXCEEDED":
+        return None
+    relative = Path(version.id) / f"{source.source_file_id}-{source_path.name}"
+    target = (source_storage_root / relative).resolve()
+    if not target.is_relative_to(source_storage_root):
+        raise ValueError("Fixture storage path escapes source root")
+    if target.is_file():
+        if sha256_bytes(target.read_bytes()) != source.sha256:
+            raise ValueError(f"Stored fixture hash mismatch: {source.path}")
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        stored = store_attachment(source_path, target)
+        if stored.sha256 != source.sha256:
+            raise ValueError(f"Stored fixture hash mismatch: {source.path}")
+    return relative.as_posix()
+
+
 async def _upsert_source_file(
     db: AsyncSession,
     *,
@@ -84,17 +109,13 @@ async def _upsert_source_file(
     row = await db.get(SourceFile, source.source_file_id)
     if row is not None and row.announcement_version_id != version.id:
         raise ValueError(f"Fixture source id already belongs to another version: {row.id}")
+    storage_path = _store_fixture_source(
+        path,
+        source=source,
+        version=version,
+        source_storage_root=source_storage_root,
+    )
     if row is None:
-        storage_path = None
-        if source.expected_extraction != "LIMIT_EXCEEDED":
-            relative = Path(version.id) / f"{source.source_file_id}-{path.name}"
-            target = (source_storage_root / relative).resolve()
-            if not target.is_relative_to(source_storage_root):
-                raise ValueError("Fixture storage path escapes source root")
-            stored = store_attachment(path, target)
-            if stored.sha256 != source.sha256:
-                raise ValueError(f"Stored fixture hash mismatch: {source.path}")
-            storage_path = relative.as_posix()
         row = SourceFile(
             id=source.source_file_id,
             announcement_version_id=version.id,
@@ -115,8 +136,13 @@ async def _upsert_source_file(
         )
         db.add(row)
         await db.flush()
-    elif row.sha256 != source.sha256 or (row.extracted_text or "") != text:
-        raise ValueError(f"Immutable fixture source does not match manifest: {row.id}")
+    else:
+        if row.sha256 != source.sha256 or (row.extracted_text or "") != text:
+            raise ValueError(f"Immutable fixture source does not match manifest: {row.id}")
+        row.storage_path = storage_path
+        row.download_status = (
+            "LIMIT_EXCEEDED" if source.expected_extraction == "LIMIT_EXCEEDED" else "SUCCEEDED"
+        )
     return EvidenceSource(
         source_file_id=row.id,
         source_version=source.sha256,

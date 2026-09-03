@@ -21,6 +21,7 @@ from app.models import (
     SourceFile,
     User,
 )
+from app.pipeline.fixtures import load_fixture_manifest
 from app.pipeline.handlers import build_handler_registry
 from app.pipeline.jobs import JobQueue
 from app.pipeline.persistence import persist_demo_fixture
@@ -63,6 +64,18 @@ async def _profile(session_factory, *, scale: str = "SMALL") -> CompanyProfileVe
 
 async def _isolation_ok() -> bool:
     return True
+
+
+def test_demo_manifest_freezes_required_extraction_coverage_matrix() -> None:
+    manifest = load_fixture_manifest(MANIFEST)
+    assert manifest.expected_ai_stages == ["CONDITION_EXTRACTION", "USER_EXPLANATION"]
+    assert set(manifest.coverage_matrix.model_dump()) == {
+        "native_hwpx",
+        "native_pdf",
+        "mixed_pdf",
+        "vision_ocr",
+        "limit_exceeded",
+    }
 
 
 def test_fixture_loader_persists_traceable_inputs_and_publishes_decision(

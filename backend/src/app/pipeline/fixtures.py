@@ -21,6 +21,14 @@ class FixtureFile(StrictFixtureModel):
     expected_extraction: Literal["NATIVE", "OCR", "LIMIT_EXCEEDED"]
 
 
+class FixtureCoverageMatrix(StrictFixtureModel):
+    native_hwpx: str
+    native_pdf: str
+    mixed_pdf: str
+    vision_ocr: str
+    limit_exceeded: str
+
+
 class DemoFixtureManifest(StrictFixtureModel):
     announcement_id: str
     wrapper_path: str
@@ -30,6 +38,7 @@ class DemoFixtureManifest(StrictFixtureModel):
     attachments: list[FixtureFile]
     expected_canonical_ir_path: str
     expected_ai_stages: list[str]
+    coverage_matrix: FixtureCoverageMatrix
 
 
 class FixtureIntegrityError(ValueError):

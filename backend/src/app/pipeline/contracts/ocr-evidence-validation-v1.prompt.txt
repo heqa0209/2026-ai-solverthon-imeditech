@@ -1,0 +1,1 @@
+Verify that every supplied OCR-derived verbatim quote is faithfully present in the supplied OCR text and supports the extracted condition. Return UNRESOLVED for any ambiguity or mismatch. Do not add facts or conditions.

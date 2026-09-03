@@ -1,9 +1,21 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["accepted", "reason"],
+  "required": ["result", "corrections", "reason"],
   "properties": {
-    "accepted": {"type": "boolean"},
+    "result": {"type": "string", "enum": ["ACCEPT", "CORRECT", "UNRESOLVED"]},
+    "corrections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["condition_id", "status"],
+        "properties": {
+          "condition_id": {"type": "string"},
+          "status": {"type": "string", "enum": ["PASS", "FAIL", "UNKNOWN"]}
+        }
+      }
+    },
     "reason": {"type": "string"}
   }
 }

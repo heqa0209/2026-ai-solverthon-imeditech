@@ -46,6 +46,7 @@ async def publish_deterministic_decision(
     selected_role_key: str | None,
     explanation: str | None = None,
     semantic_evaluations: dict[str, Evaluation] | None = None,
+    safety_unknown_condition_ids: set[str] | None = None,
 ) -> EligibilityDecision:
     """Compute and atomically publish a rules-owned eligibility decision.
 
@@ -94,6 +95,7 @@ async def publish_deterministic_decision(
         selected_role_key,
         condition_values=condition_values,
         semantic_evaluations=semantic_evaluations,
+        safety_unknown_condition_ids=safety_unknown_condition_ids,
     )
 
     await _serialize_publication(db, user_id=user_id, announcement_id=announcement_id)

@@ -264,7 +264,15 @@ def test_ocr_source_is_passed_as_bounded_image_and_stage_matrix_is_persisted(
             {
                 AIStage.OCR: {"text": ocr_text},
                 AIStage.CONDITION_EXTRACTION: ir,
-                AIStage.FINAL_AI_VALIDATION: {"accepted": True, "reason": "근거 확인"},
+                AIStage.OCR_EVIDENCE_VALIDATION: {
+                    "result": "ACCEPT",
+                    "reason": "OCR 인용 확인",
+                },
+                AIStage.FINAL_AI_VALIDATION: {
+                    "result": "ACCEPT",
+                    "corrections": [],
+                    "reason": "근거 확인",
+                },
                 AIStage.USER_EXPLANATION: {"explanation": "OCR 근거를 확인했습니다."},
             }
         )
@@ -291,6 +299,7 @@ def test_ocr_source_is_passed_as_bounded_image_and_stage_matrix_is_persisted(
             stages = list((await db.scalars(select(AIStageRun).order_by(AIStageRun.id))).all())
             assert {stage.stage for stage in stages} == {
                 "OCR",
+                "OCR_EVIDENCE_VALIDATION",
                 "CONDITION_EXTRACTION",
                 "FINAL_AI_VALIDATION",
                 "USER_EXPLANATION",
@@ -301,6 +310,7 @@ def test_ocr_source_is_passed_as_bounded_image_and_stage_matrix_is_persisted(
                 if stage
                 in {
                     AIStage.OCR,
+                    AIStage.OCR_EVIDENCE_VALIDATION,
                     AIStage.CONDITION_EXTRACTION,
                     AIStage.FINAL_AI_VALIDATION,
                     AIStage.USER_EXPLANATION,
@@ -364,6 +374,58 @@ def test_incomplete_attachment_forces_safe_needs_confirmation(
     asyncio.run(scenario())
 
 
+def test_unresolved_ocr_evidence_becomes_unknown_without_sol_override(
+    session_factory, tmp_path: Path
+) -> None:
+    storage = tmp_path / "sources"
+
+    async def scenario() -> None:
+        seeded = await _seed(session_factory, storage, ocr_image=True)
+        ocr_text = "지원 대상은 소기업입니다."
+        ir = _canonical_ir("analysis-image", seeded["image_hash"], ocr_text)
+        ir["conditions"][0]["evidence"][0]["page"] = 1
+        fake = FakeAIExecutor(
+            {
+                AIStage.OCR: {"text": ocr_text},
+                AIStage.CONDITION_EXTRACTION: ir,
+                AIStage.OCR_EVIDENCE_VALIDATION: {
+                    "result": "UNRESOLVED",
+                    "reason": "스캔이 흐립니다.",
+                },
+                AIStage.USER_EXPLANATION: {"explanation": "원문 확인이 필요합니다."},
+            }
+        )
+        analyzer = ProductionAnnouncementAnalyzer(
+            sessions=session_factory,
+            executor=fake,
+            source_storage_root=storage,
+        )
+        publisher = await analyzer.prepare(
+            payload=type(
+                "Payload",
+                (),
+                {
+                    "announcement_id": seeded["announcement"],
+                    "announcement_version_id": seeded["version"],
+                },
+            )(),
+            context=type("Context", (), {})(),
+        )
+        async with session_factory.begin() as db:
+            await publisher(db, type("Job", (), {})())
+        async with session_factory() as db:
+            decision = await db.scalar(select(EligibilityDecision))
+            result = await db.scalar(select(ConditionResult))
+            assert decision.calculated_verdict == "NEEDS_CONFIRMATION"
+            assert decision.published_verdict == "NEEDS_CONFIRMATION"
+            assert result.status == "UNKNOWN"
+            assert AIStage.FINAL_AI_VALIDATION not in {
+                invocation.stage for invocation in fake.invocations
+            }
+
+    asyncio.run(scenario())
+
+
 def test_semantic_stage_is_profile_scoped_and_cannot_override_explicit_rules(
     session_factory, tmp_path: Path
 ) -> None:
@@ -392,7 +454,11 @@ def test_semantic_stage_is_profile_scoped_and_cannot_override_explicit_rules(
                     "status": "PASS",
                     "explanation": "프로필과 원문이 명확히 일치합니다.",
                 },
-                AIStage.FINAL_AI_VALIDATION: {"accepted": True, "reason": "근거 확인"},
+                AIStage.FINAL_AI_VALIDATION: {
+                    "result": "ACCEPT",
+                    "corrections": [],
+                    "reason": "근거 확인",
+                },
                 AIStage.USER_EXPLANATION: {"explanation": "두 필수 조건을 충족합니다."},
             }
         )
@@ -438,6 +504,67 @@ def test_semantic_stage_is_profile_scoped_and_cannot_override_explicit_rules(
                 "USER_EXPLANATION",
             }
             assert statuses == {"PASS"}
+
+    asyncio.run(scenario())
+
+
+def test_sol_stage_is_skipped_when_ai_result_cannot_change_rules_owned_verdict(
+    session_factory, tmp_path: Path
+) -> None:
+    storage = tmp_path / "sources"
+
+    async def scenario() -> None:
+        seeded = await _seed(session_factory, storage)
+        ir = _canonical_ir(seeded["source"], seeded["source_hash"], seeded["text"])
+        ir["conditions"][0]["expected_value"]["value"] = "LARGE"
+        ir["conditions"].append(
+            {
+                "condition_id": "semantic-fit",
+                "group_id": "root",
+                "kind": "MANDATORY",
+                "subject": "OTHER",
+                "operator": "SEMANTIC_MATCH",
+                "expected_value": {"type": "STRING", "value": "소기업 역량"},
+                "unit": None,
+                "reference_date": None,
+                "evidence": ir["conditions"][0]["evidence"],
+            }
+        )
+        fake = FakeAIExecutor(
+            {
+                AIStage.CONDITION_EXTRACTION: ir,
+                AIStage.SEMANTIC_JUDGMENT: {
+                    "status": "PASS",
+                    "explanation": "의미 조건은 충족합니다.",
+                },
+                AIStage.USER_EXPLANATION: {"explanation": "명시 조건이 불일치합니다."},
+            }
+        )
+        analyzer = ProductionAnnouncementAnalyzer(
+            sessions=session_factory,
+            executor=fake,
+            source_storage_root=storage,
+        )
+        publisher = await analyzer.prepare(
+            payload=type(
+                "Payload",
+                (),
+                {
+                    "announcement_id": seeded["announcement"],
+                    "announcement_version_id": seeded["version"],
+                },
+            )(),
+            context=type("Context", (), {})(),
+        )
+        async with session_factory.begin() as db:
+            await publisher(db, type("Job", (), {})())
+        async with session_factory() as db:
+            decision = await db.scalar(select(EligibilityDecision))
+            assert decision.calculated_verdict == "INELIGIBLE"
+            assert decision.published_verdict == "INELIGIBLE"
+            assert AIStage.FINAL_AI_VALIDATION not in {
+                invocation.stage for invocation in fake.invocations
+            }
 
     asyncio.run(scenario())
 

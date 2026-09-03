@@ -60,6 +60,7 @@ class SourceAnalysis:
     pages: dict[int, str]
     extraction_status: str
     failure_code: str | None
+    used_ocr: bool = False
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,7 @@ class ProfileInput:
 class ProfileAnalysis:
     profile: ProfileInput
     semantic_evaluations: dict[str, Evaluation]
+    safety_unknown_condition_ids: frozenset[str]
     stages: tuple[StageResult, ...]
     explanation: str | None
     force_confirmation: bool
@@ -217,7 +219,7 @@ class ProductionAnnouncementAnalyzer:
             raise AIExecutionError(
                 "OCR_OUTPUT_INVALID", "OCR output did not contain text", retryable=False
             )
-        return SourceAnalysis(source, text, {1: text}, "SUCCEEDED", None), stage
+        return SourceAnalysis(source, text, {1: text}, "SUCCEEDED", None, used_ocr=True), stage
 
     async def prepare(self, payload: Any, context: Any) -> Publisher:
         if not payload.announcement_id or not payload.announcement_version_id:
@@ -343,8 +345,47 @@ class ProductionAnnouncementAnalyzer:
             )
             profile_analyses: list[ProfileAnalysis] = []
             ir_json = canonical_ir.model_dump(mode="json")
-            ocr_used = any(stage.stage == AIStage.OCR for stage in stages)
+            ocr_source_ids = {
+                item.source.source_file_id for item in source_analyses if item.used_ocr
+            }
+            ocr_condition_ids = {
+                condition.condition_id
+                for condition in canonical_ir.conditions
+                if condition.kind.value == "MANDATORY"
+                and any(
+                    evidence.source_file_id in ocr_source_ids for evidence in condition.evidence
+                )
+            }
+            safety_unknown_condition_ids: set[str] = set()
+            if ocr_condition_ids:
+                ocr_validation = await self._run_stage(
+                    stage=AIStage.OCR_EVIDENCE_VALIDATION,
+                    temp_root=temp_root,
+                    instruction_path=self._contract_root / "ocr-evidence-validation-v1.prompt.txt",
+                    schema_path=self._contract_root / "ocr-evidence-validation-v1.schema.json",
+                    structured_input={
+                        "announcement_version_id": version.id,
+                        "conditions": [
+                            condition.model_dump(mode="json")
+                            for condition in canonical_ir.conditions
+                            if condition.condition_id in ocr_condition_ids
+                        ],
+                        "ocr_sources": [
+                            {
+                                "source_file_id": item.source.source_file_id,
+                                "source_version": item.source.sha256,
+                                "text": item.text,
+                            }
+                            for item in source_analyses
+                            if item.source.source_file_id in ocr_source_ids
+                        ],
+                    },
+                )
+                stages.append(ocr_validation)
+                if (ocr_validation.output or {}).get("result") != "ACCEPT":
+                    safety_unknown_condition_ids.update(ocr_condition_ids)
             for profile in profiles:
+                profile_safety_unknown_ids = set(safety_unknown_condition_ids)
                 semantic_evaluations: dict[str, Evaluation] = {}
                 profile_stages: list[StageResult] = []
                 for condition in canonical_ir.conditions:
@@ -380,9 +421,18 @@ class ProductionAnnouncementAnalyzer:
                     profile.snapshot,
                     None,
                     semantic_evaluations=semantic_evaluations,
+                    safety_unknown_condition_ids=profile_safety_unknown_ids,
                 )
                 force_confirmation = False
-                if semantic_evaluations or ocr_used:
+                ai_dependent_ids = set(semantic_evaluations) | ocr_condition_ids
+                counterfactual = evaluate_decision(
+                    ir_json,
+                    profile.snapshot,
+                    None,
+                    semantic_evaluations=semantic_evaluations,
+                    safety_unknown_condition_ids=(profile_safety_unknown_ids | ai_dependent_ids),
+                )
+                if ai_dependent_ids and counterfactual.verdict != calculated.verdict:
                     validation_stage = await self._run_stage(
                         stage=AIStage.FINAL_AI_VALIDATION,
                         temp_root=temp_root,
@@ -396,20 +446,43 @@ class ProductionAnnouncementAnalyzer:
                                 key: value.status.value
                                 for key, value in semantic_evaluations.items()
                             },
-                            "ocr_evidence_used": ocr_used,
+                            "ocr_condition_ids": sorted(ocr_condition_ids),
                         },
                         company_profile_version_id=profile.version_id,
                     )
                     profile_stages.append(validation_stage)
-                    if (validation_stage.output or {}).get("accepted") is not True:
-                        force_confirmation = True
-                        semantic_evaluations = {
-                            key: Evaluation(
-                                ConditionStatus.UNKNOWN,
-                                explanation="최종 검증에서 의미판단을 확정하지 못했습니다.",
-                            )
-                            for key in semantic_evaluations
-                        }
+                    validation_output = validation_stage.output or {}
+                    validation_result = validation_output.get("result")
+                    corrections = validation_output.get("corrections", [])
+                    if validation_result == "CORRECT" and isinstance(corrections, list):
+                        correction_valid = bool(corrections)
+                        for correction in corrections:
+                            condition_id = correction.get("condition_id")
+                            status = correction.get("status")
+                            if condition_id in semantic_evaluations and status in {
+                                "PASS",
+                                "FAIL",
+                                "UNKNOWN",
+                            }:
+                                semantic_evaluations[condition_id] = Evaluation(
+                                    ConditionStatus(status),
+                                    explanation="최종 AI 검증으로 의미판단을 정정했습니다.",
+                                )
+                            elif condition_id in ocr_condition_ids:
+                                profile_safety_unknown_ids.add(condition_id)
+                            else:
+                                correction_valid = False
+                        if not correction_valid:
+                            profile_safety_unknown_ids.update(ai_dependent_ids)
+                    elif validation_result != "ACCEPT":
+                        profile_safety_unknown_ids.update(ai_dependent_ids)
+                    calculated = evaluate_decision(
+                        ir_json,
+                        profile.snapshot,
+                        None,
+                        semantic_evaluations=semantic_evaluations,
+                        safety_unknown_condition_ids=profile_safety_unknown_ids,
+                    )
                 explanation_stage = await self._run_stage(
                     stage=AIStage.USER_EXPLANATION,
                     temp_root=temp_root,
@@ -450,6 +523,7 @@ class ProductionAnnouncementAnalyzer:
                     ProfileAnalysis(
                         profile,
                         semantic_evaluations,
+                        frozenset(profile_safety_unknown_ids),
                         tuple(profile_stages),
                         explanation,
                         force_confirmation,
@@ -538,6 +612,7 @@ class ProductionAnnouncementAnalyzer:
                     selected_role_key=None,
                     explanation=profile_analysis.explanation,
                     semantic_evaluations=profile_analysis.semantic_evaluations,
+                    safety_unknown_condition_ids=set(profile_analysis.safety_unknown_condition_ids),
                 )
                 if incomplete or profile_analysis.force_confirmation:
                     decision.published_verdict = Verdict.NEEDS_CONFIRMATION.value

@@ -212,6 +212,7 @@ def evaluate_decision(
     selected_role_key: str | None = None,
     condition_values: dict[str, object] | None = None,
     semantic_evaluations: dict[str, Evaluation] | None = None,
+    safety_unknown_condition_ids: set[str] | None = None,
 ) -> DecisionEvaluation:
     conditions = [item for item in canonical_ir.get("conditions", []) if isinstance(item, dict)]
     mandatory = [item for item in conditions if item.get("kind") == "MANDATORY"]
@@ -264,7 +265,12 @@ def evaluate_decision(
             if field:
                 condition_profile = {**profile, field: condition_values[condition_id]}
         deterministic = evaluate_condition(condition_profile, condition)
-        if (
+        if safety_unknown_condition_ids and condition_id in safety_unknown_condition_ids:
+            evaluations[condition_id] = Evaluation(
+                ConditionStatus.UNKNOWN,
+                explanation="AI 의존 근거를 안전하게 확정할 수 없습니다.",
+            )
+        elif (
             str(condition.get("operator", "")) == "SEMANTIC_MATCH"
             and semantic_evaluations
             and condition_id in semantic_evaluations

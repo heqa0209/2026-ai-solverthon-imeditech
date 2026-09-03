@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["result", "reason"],
+  "properties": {
+    "result": {"type": "string", "enum": ["ACCEPT", "UNRESOLVED"]},
+    "reason": {"type": "string"}
+  }
+}

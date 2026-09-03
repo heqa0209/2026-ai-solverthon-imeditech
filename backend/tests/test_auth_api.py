@@ -5,7 +5,7 @@ import asyncio
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.auth import SESSION_COOKIE_NAME
+from app.auth import SESSION_COOKIE_NAME, create_user
 from app.models import Session
 
 
@@ -67,3 +67,22 @@ def test_validation_error_rejects_unknown_fields(client: TestClient) -> None:
     )
     assert response.status_code == 422
     assert response.json()["code"] == "VALIDATION_ERROR"
+
+
+def test_invalid_username_cannot_be_truncated_into_an_existing_user(
+    client: TestClient, session_factory
+) -> None:
+    valid_username = "a" * 50
+
+    async def seed_user() -> None:
+        async with session_factory() as db:
+            await create_user(db, valid_username, "known-password")
+
+    asyncio.run(seed_user())
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"username": f"{valid_username}!", "password": "known-password"},
+    )
+    assert response.status_code == 401
+    assert response.json()["code"] == "LOGIN_FAILED"
+    assert SESSION_COOKIE_NAME not in response.cookies

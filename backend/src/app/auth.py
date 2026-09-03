@@ -128,8 +128,10 @@ async def login(
 ) -> AuthResponse:
     try:
         username = normalize_username(body.username)
+        username_is_valid = True
     except ValueError:
-        username = body.username.strip().lower()[:50]
+        username = f"invalid-{hash_secret(body.username)[:42]}"
+        username_is_valid = False
     ip_address = request.client.host if request.client else "unknown"
     window_start = utc_now() - LOGIN_WINDOW
     failed_count = await db.scalar(
@@ -143,7 +145,11 @@ async def login(
     if (failed_count or 0) >= 5:
         raise ApiError(429, "LOGIN_RATE_LIMITED", "잠시 후 다시 시도해 주세요.")
 
-    user = await db.scalar(select(User).where(User.username == username, User.is_active.is_(True)))
+    user = None
+    if username_is_valid:
+        user = await db.scalar(
+            select(User).where(User.username == username, User.is_active.is_(True))
+        )
     if user is None or not verify_password(user.password_hash, body.password):
         db.add(
             LoginAttempt(

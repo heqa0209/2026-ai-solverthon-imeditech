@@ -51,6 +51,8 @@ export interface AnnouncementListItem {
   id: string;
   announcementVersionId: string;
   companyProfileVersionId: string | null;
+  decisionId: string | null;
+  decisionPublishedAt: string | null;
   title: string;
   agencyName: string | null;
   recruitmentStartsOn: string | null;

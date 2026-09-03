@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 const item = {
-  id: "notice-1", announcementVersionId: "version-1", companyProfileVersionId: "company-1", title: "2026 의료기기 기술개발 지원사업",
+  id: "notice-1", announcementVersionId: "version-1", companyProfileVersionId: "company-1", decisionId: "decision-1", decisionPublishedAt: "2026-09-03T09:00:00+09:00", title: "2026 의료기기 기술개발 지원사업",
   agencyName: "중소벤처기업부", recruitmentStartsOn: "2026-09-01", recruitmentEndsOn: "2026-09-30", recruitmentStatus: "OPEN",
   eligibility: "ELIGIBLE", reason: "기업규모와 지역 조건을 충족합니다.", interestStatus: "INTERESTED", decisionFreshness: "CURRENT",
 };

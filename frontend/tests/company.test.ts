@@ -24,4 +24,11 @@ describe("company form contract", () => {
     expect(errors.companyName).toContain("기업명");
     expect(errors.foundedOn).toContain("오늘");
   });
+
+  it("blocks revenue integers that JSON cannot represent exactly", () => {
+    const unsafeDraft = { ...draft, annualRevenue: "9,007,199,254,740,992" };
+    const errors = validateCompany(unsafeDraft);
+    expect(errors.annualRevenue).toContain("정확하게 처리할 수 있는 범위");
+    expect(() => buildCompanyInput(unsafeDraft)).toThrow(RangeError);
+  });
 });

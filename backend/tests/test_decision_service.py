@@ -66,6 +66,7 @@ def test_publish_decision_replaces_pointer_and_applies_condition_scoped_answer(
                             "subject": "EMPLOYEE_COUNT",
                             "operator": "LTE",
                             "expected_value": {"type": "INTEGER", "value": 10},
+                            "unit": "명",
                         }
                     ],
                 },
@@ -80,6 +81,7 @@ def test_publish_decision_replaces_pointer_and_applies_condition_scoped_answer(
                 subject="EMPLOYEE_COUNT",
                 operator="LTE",
                 expected_value={"type": "INTEGER", "value": 10},
+                unit="명",
                 evidence=[{"verbatim_text": "상시근로자 10인 이하"}],
             )
             db.add(condition)

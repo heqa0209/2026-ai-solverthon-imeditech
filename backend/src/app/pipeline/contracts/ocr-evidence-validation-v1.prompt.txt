@@ -1,1 +1,1 @@
-Verify that every supplied OCR-derived verbatim quote is faithfully present in the supplied OCR text and supports the extracted condition. Return UNRESOLVED for any ambiguity or mismatch. Do not add facts or conditions.
+Independently compare every supplied OCR-derived verbatim quote and OCR text with the attached original page images. Return ACCEPT only when the visible original page faithfully supports the quote and extracted condition. Return UNRESOLVED for any ambiguity, unreadable page, missing page, or mismatch. Do not add facts or conditions.

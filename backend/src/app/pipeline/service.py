@@ -8,7 +8,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.enums import Verdict
-from app.jobs import enqueue_job
+from app.jobs import enqueue_job, idempotency_key, insert_job_idempotently
 from app.models import (
     Announcement,
     CompanyProfile,
@@ -100,16 +100,20 @@ class DatabasePipelineCLIService(PipelineCLIService):
             if announcement is None or announcement.current_version_id is None:
                 return 0
             if operation in {"announcement.analyze", "announcement.reanalyze"}:
-                await enqueue_job(
+                payload = {
+                    "announcementId": announcement.id,
+                    "announcementVersionId": announcement.current_version_id,
+                }
+                if operation == "announcement.reanalyze":
+                    payload["requestedAt"] = datetime.now(UTC).isoformat()
+                _, created = await insert_job_idempotently(
                     db,
-                    "ANNOUNCEMENT_ANALYZE",
-                    {
-                        "announcementId": announcement.id,
-                        "announcementVersionId": announcement.current_version_id,
-                    },
+                    job_type="ANNOUNCEMENT_ANALYZE",
+                    payload=payload,
+                    key=idempotency_key("ANNOUNCEMENT_ANALYZE", payload),
                 )
                 await db.commit()
-                return 1
+                return int(created)
             if operation == "decision.reevaluate":
                 profiles = list(
                     (
@@ -120,20 +124,24 @@ class DatabasePipelineCLIService(PipelineCLIService):
                         )
                     ).all()
                 )
+                created_count = 0
                 for profile in profiles:
-                    await enqueue_job(
+                    payload = {
+                        "userId": profile.user_id,
+                        "announcementId": announcement.id,
+                        "announcementVersionId": announcement.current_version_id,
+                        "companyProfileVersionId": profile.current_version_id,
+                        "cause": "CLI_REQUESTED",
+                    }
+                    _, created = await insert_job_idempotently(
                         db,
-                        "DECISION_REEVALUATE",
-                        {
-                            "userId": profile.user_id,
-                            "announcementId": announcement.id,
-                            "announcementVersionId": announcement.current_version_id,
-                            "companyProfileVersionId": profile.current_version_id,
-                            "cause": "CLI_REQUESTED",
-                        },
+                        job_type="DECISION_REEVALUATE",
+                        payload=payload,
+                        key=idempotency_key("DECISION_REEVALUATE", payload),
                     )
+                    created_count += int(created)
                 await db.commit()
-                return len(profiles)
+                return created_count
             return 0
 
     async def job_status(self, job_id: str) -> str:

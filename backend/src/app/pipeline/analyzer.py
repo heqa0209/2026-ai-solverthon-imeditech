@@ -32,7 +32,7 @@ from app.pipeline.ai import (
     AIStage,
     build_codex_invocation,
 )
-from app.pipeline.extraction import ExtractionFailure, decide_ocr, extract_native
+from app.pipeline.extraction import ExtractionFailure, decide_ocr, extract_native, render_pdf_pages
 from app.pipeline.input_budget import InputDocument, build_bounded_input
 from app.pipeline.ir import CanonicalIR, EvidenceSource, validate_evidence
 from app.pipeline.jobs import Publisher
@@ -61,6 +61,8 @@ class SourceAnalysis:
     extraction_status: str
     failure_code: str | None
     used_ocr: bool = False
+    ocr_images: tuple[Path, ...] = ()
+    input_truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,7 @@ class StageResult:
     schema_version: str
     company_profile_version_id: str | None = None
     error_code: str | None = None
+    condition_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -132,6 +135,7 @@ class ProductionAnnouncementAnalyzer:
         image_paths: tuple[Path, ...] = (),
         company_profile_version_id: str | None = None,
         capture_failure: bool = False,
+        condition_id: str | None = None,
     ) -> StageResult:
         local_schema = temp_root / schema_path.name
         await asyncio.to_thread(shutil.copy2, schema_path, local_schema)
@@ -168,6 +172,7 @@ class ProductionAnnouncementAnalyzer:
             schema_version=schema_path.stem,
             company_profile_version_id=company_profile_version_id,
             error_code=error_code,
+            condition_id=condition_id,
         )
 
     async def _analyze_source(
@@ -200,8 +205,18 @@ class ProductionAnnouncementAnalyzer:
         ocr = decide_ocr(path, extraction)
         if not ocr.required or path.suffix.casefold() not in {".pdf", ".png", ".jpg", ".jpeg"}:
             return SourceAnalysis(source, "", {}, "SKIPPED", "OCR_FORMAT_UNSUPPORTED"), None
-        image = temp_root / f"ocr-{source.source_file_id}{path.suffix.casefold()}"
-        await asyncio.to_thread(shutil.copy2, path, image)
+        if path.suffix.casefold() == ".pdf":
+            images, truncated = await asyncio.to_thread(
+                render_pdf_pages,
+                path,
+                temp_root / f"ocr-{source.source_file_id}",
+            )
+        else:
+            image = temp_root / f"ocr-{source.source_file_id}{path.suffix.casefold()}"
+            await asyncio.to_thread(shutil.copy2, path, image)
+            images, truncated = (image,), False
+        if not images:
+            return SourceAnalysis(source, "", {}, "FAILED_FINAL", "PDF_RENDER_EMPTY"), None
         stage = await self._run_stage(
             stage=AIStage.OCR,
             temp_root=temp_root,
@@ -212,14 +227,26 @@ class ProductionAnnouncementAnalyzer:
                 "source_version": source.sha256,
                 "filename": source.name,
             },
-            image_paths=(image,),
+            image_paths=images,
         )
         text = stage.output.get("text")
         if not isinstance(text, str) or not text.strip():
             raise AIExecutionError(
                 "OCR_OUTPUT_INVALID", "OCR output did not contain text", retryable=False
             )
-        return SourceAnalysis(source, text, {1: text}, "SUCCEEDED", None, used_ocr=True), stage
+        return (
+            SourceAnalysis(
+                source,
+                text,
+                {1: text},
+                "SUCCEEDED",
+                None,
+                used_ocr=True,
+                ocr_images=images,
+                input_truncated=truncated,
+            ),
+            stage,
+        )
 
     async def prepare(self, payload: Any, context: Any) -> Publisher:
         if not payload.announcement_id or not payload.announcement_version_id:
@@ -339,7 +366,7 @@ class ProductionAnnouncementAnalyzer:
                     retryable=False,
                 ) from exc
             incomplete = bounded.truncated or any(
-                item.failure_code is not None for item in source_analyses
+                item.failure_code is not None or item.input_truncated for item in source_analyses
             )
             profile_analyses: list[ProfileAnalysis] = []
             ir_json = canonical_ir.model_dump(mode="json")
@@ -378,6 +405,12 @@ class ProductionAnnouncementAnalyzer:
                             if item.source.source_file_id in ocr_source_ids
                         ],
                     },
+                    image_paths=tuple(
+                        image
+                        for item in source_analyses
+                        if item.source.source_file_id in ocr_source_ids
+                        for image in item.ocr_images
+                    ),
                 )
                 stages.append(ocr_validation)
                 if (ocr_validation.output or {}).get("result") != "ACCEPT":
@@ -401,8 +434,16 @@ class ProductionAnnouncementAnalyzer:
                             "condition": condition.model_dump(mode="json"),
                         },
                         company_profile_version_id=profile.version_id,
+                        condition_id=condition.condition_id,
                     )
                     profile_stages.append(semantic_stage)
+                    returned_condition_id = (semantic_stage.output or {}).get("condition_id")
+                    if returned_condition_id not in {None, condition.condition_id}:
+                        raise AIExecutionError(
+                            "SEMANTIC_OUTPUT_INVALID",
+                            "Semantic judgment returned a mismatched condition ID",
+                            retryable=False,
+                        )
                     status = (semantic_stage.output or {}).get("status")
                     if status not in {"PASS", "FAIL", "UNKNOWN"}:
                         raise AIExecutionError(
@@ -439,9 +480,13 @@ class ProductionAnnouncementAnalyzer:
                         structured_input={
                             "announcement_version_id": version.id,
                             "company_profile_version_id": profile.version_id,
+                            "profile": profile.snapshot,
                             "calculated_verdict": calculated.verdict.value,
                             "semantic_results": {
-                                key: value.status.value
+                                key: {
+                                    "status": value.status.value,
+                                    "explanation": value.explanation,
+                                }
                                 for key, value in semantic_evaluations.items()
                             },
                             "ocr_condition_ids": sorted(ocr_condition_ids),
@@ -573,7 +618,11 @@ class ProductionAnnouncementAnalyzer:
                         prompt_version=stage.prompt_version,
                         schema_version=stage.schema_version,
                         input_hash=stage.input_hash,
-                        structured_output=stage.output,
+                        structured_output=(
+                            {**stage.output, "condition_id": stage.condition_id}
+                            if stage.output is not None and stage.condition_id is not None
+                            else stage.output
+                        ),
                         evidence=evidence,
                         duration_ms=stage.duration_ms,
                         attempt=1,

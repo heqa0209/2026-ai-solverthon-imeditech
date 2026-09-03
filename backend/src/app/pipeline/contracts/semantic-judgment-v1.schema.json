@@ -1,8 +1,9 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["status", "explanation"],
+  "required": ["condition_id", "status", "explanation"],
   "properties": {
+    "condition_id": {"type": "string"},
     "status": {"type": "string", "enum": ["PASS", "FAIL", "UNKNOWN"]},
     "explanation": {"type": "string"}
   }

@@ -320,7 +320,13 @@ def test_ocr_source_is_passed_as_bounded_image_and_stage_matrix_is_persisted(
             image_invocation = next(
                 invocation for invocation in fake.invocations if invocation.stage == AIStage.OCR
             )
+            validation_invocation = next(
+                invocation
+                for invocation in fake.invocations
+                if invocation.stage == AIStage.OCR_EVIDENCE_VALIDATION
+            )
             assert "--image" in image_invocation.args
+            assert "--image" in validation_invocation.args
             assert "shell_tool" in {
                 image_invocation.args[index + 1]
                 for index, value in enumerate(image_invocation.args[:-1])
@@ -504,6 +510,14 @@ def test_semantic_stage_is_profile_scoped_and_cannot_override_explicit_rules(
                 "USER_EXPLANATION",
             }
             assert statuses == {"PASS"}
+            final_invocation = next(
+                invocation
+                for invocation in fake.invocations
+                if invocation.stage == AIStage.FINAL_AI_VALIDATION
+            )
+            final_input = final_invocation.stdin.decode()
+            assert '"profile":{"companyName":"합성 기업","companyScale":"SMALL"}' in final_input
+            assert '"explanation":"프로필과 원문이 명확히 일치합니다."' in final_input
 
     asyncio.run(scenario())
 

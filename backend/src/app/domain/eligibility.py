@@ -62,9 +62,21 @@ def _compare(operator: str, actual: Any, expected: Any) -> bool | None:
     if operator == "NE":
         return actual != expected
     if operator == "IN":
-        return actual in expected if isinstance(expected, list) else None
+        if not isinstance(expected, list):
+            return None
+        return (
+            any(item in expected for item in actual)
+            if isinstance(actual, list)
+            else actual in expected
+        )
     if operator == "NOT_IN":
-        return actual not in expected if isinstance(expected, list) else None
+        if not isinstance(expected, list):
+            return None
+        return (
+            all(item not in expected for item in actual)
+            if isinstance(actual, list)
+            else actual not in expected
+        )
     if operator in {"LT", "LTE", "GT", "GTE"}:
         try:
             return {
@@ -124,6 +136,14 @@ def evaluate_condition(profile: dict[str, Any], condition: dict[str, Any]) -> Ev
 
     if subject == "OTHER" or operator == "SEMANTIC_MATCH":
         return Evaluation(ConditionStatus.UNKNOWN, explanation="비정형 의미판단이 필요합니다.")
+
+    profile_units = {"ANNUAL_REVENUE": "원", "EMPLOYEE_COUNT": "명"}
+    if subject in profile_units and condition.get("unit") != profile_units[subject]:
+        return Evaluation(
+            ConditionStatus.UNKNOWN,
+            used_value=None if actual is None else {"value": actual},
+            explanation="공고 조건의 단위가 기업정보 단위와 일치하지 않아 자동 비교할 수 없습니다.",
+        )
 
     if subject == "FOUNDED_ON" and isinstance(actual, str):
         try:

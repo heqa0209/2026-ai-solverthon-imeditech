@@ -43,6 +43,7 @@ def test_numeric_enum_and_region_conditions_are_deterministic() -> None:
         == ConditionStatus.PASS
     )
     revenue = condition("ANNUAL_REVENUE", "LTE", {"type": "INTEGER", "value": 100})
+    revenue["unit"] = "원"
     revenue["reference_date"] = "2025-12-31"
     result = evaluate_condition(profile, revenue)
     assert result.status == ConditionStatus.PASS
@@ -58,6 +59,7 @@ def test_numeric_enum_and_region_conditions_are_deterministic() -> None:
 
 def test_missing_or_unconvertible_is_unknown_and_mismatch_is_fail() -> None:
     employee = condition("EMPLOYEE_COUNT", "LTE", {"type": "INTEGER", "value": 10})
+    employee["unit"] = "명"
     assert evaluate_condition({}, employee).status == ConditionStatus.UNKNOWN
     assert evaluate_condition({"employeeCount": 11}, employee).status == ConditionStatus.FAIL
     assert (
@@ -75,9 +77,46 @@ def test_tagged_range_expected_value_is_evaluated_against_inner_bounds() -> None
         "BETWEEN",
         {"type": "RANGE", "value": {"minimum": 10, "maximum": 20}},
     )
+    revenue_range["unit"] = "원"
     assert evaluate_condition({"annualRevenue": 15}, revenue_range).status == ConditionStatus.PASS
     assert evaluate_condition({"annualRevenue": 21}, revenue_range).status == ConditionStatus.FAIL
     assert evaluate_condition({}, revenue_range).status == ConditionStatus.UNKNOWN
+
+
+def test_numeric_units_must_match_the_company_profile_unit() -> None:
+    revenue = condition("ANNUAL_REVENUE", "LTE", {"type": "INTEGER", "value": 100})
+    revenue["unit"] = "억원"
+    employee = condition("EMPLOYEE_COUNT", "LTE", {"type": "INTEGER", "value": 10})
+    employee["unit"] = None
+
+    assert evaluate_condition({"annualRevenue": 90}, revenue).status == ConditionStatus.UNKNOWN
+    assert evaluate_condition({"employeeCount": 9}, employee).status == ConditionStatus.UNKNOWN
+
+
+def test_set_membership_compares_items_instead_of_nested_lists() -> None:
+    certification = condition(
+        "CERTIFICATION",
+        "IN",
+        {"type": "STRING_SET", "values": ["벤처기업", "이노비즈"]},
+    )
+    excluded = condition(
+        "SECONDARY_INDUSTRY",
+        "NOT_IN",
+        {"type": "STRING_SET", "values": ["사행성"]},
+    )
+
+    assert (
+        evaluate_condition({"certifications": ["벤처기업"]}, certification).status
+        == ConditionStatus.PASS
+    )
+    assert (
+        evaluate_condition({"secondaryIndustries": ["제조업"]}, excluded).status
+        == ConditionStatus.PASS
+    )
+    assert (
+        evaluate_condition({"secondaryIndustries": ["제조업", "사행성"]}, excluded).status
+        == ConditionStatus.FAIL
+    )
 
 
 def test_role_selection_and_multiple_paths() -> None:

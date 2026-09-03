@@ -33,7 +33,7 @@ npm --prefix frontend ci
 npm --prefix frontend run dev
 ```
 
-worker는 `.env`, 문서, 원본 저장소를 읽을 수 없는 전용 OS 권한에서 격리 self-test를 통과해야 job을 가져옵니다. 검사 실패를 우회해 운영하지 않습니다.
+신뢰된 worker coordinator가 수집·추출을 맡고, 비신뢰 문서를 해석하는 tool-less `codex exec` 자식은 임시경로·환경 allowlist·read-only sandbox 격리 self-test를 통과해야 실행됩니다. 검사 실패를 우회해 운영하지 않습니다.
 
 ## fixture와 관리 CLI
 

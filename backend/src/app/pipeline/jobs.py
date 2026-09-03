@@ -149,6 +149,7 @@ class JobQueue:
         error_code: str,
         error_message: str,
         retryable: bool,
+        final_failure_publisher: Publisher | None = None,
         now: datetime | None = None,
     ) -> JobStatus:
         now = now or datetime.now(UTC)
@@ -165,6 +166,8 @@ class JobQueue:
                 job.status = JobStatus.FAILED_FINAL.value
             job.error_code = error_code
             job.error_message = error_message[-2000:]
+            if not can_retry and final_failure_publisher is not None:
+                await final_failure_publisher(session, job)
             job.lease_owner = None
             job.lease_expires_at = None
             job.heartbeat_at = now

@@ -8,8 +8,12 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.decision_service import publish_deterministic_decision
+from app.decision_service import publish_analysis_failure, publish_deterministic_decision
+from app.domain.eligibility import Evaluation
+from app.enums import ConditionStatus
+from app.jobs import enqueue_job
 from app.models import (
+    AIStageRun,
     AnalysisRun,
     Announcement,
     AnnouncementRoleSelection,
@@ -40,6 +44,9 @@ class AnnouncementAnalyzePayload(StrictJobPayload):
     announcement_id: str | None = None
     announcement_version_id: str | None = None
     fixture_manifest: str | None = None
+    company_profile_version_id: str | None = None
+    requested_by_job_id: str | None = None
+    requested_at: str | None = None
 
 
 class AnnouncementAnalyzer(Protocol):
@@ -68,8 +75,82 @@ def _normalize_payload(raw: dict[str, Any]) -> dict[str, Any]:
         "fixtureManifest": "fixture_manifest",
         "scheduledFor": "scheduled_for",
         "requestedAt": "requested_at",
+        "requestedByJobId": "requested_by_job_id",
     }
     return {aliases.get(key, key): value for key, value in raw.items()}
+
+
+async def _load_semantic_evaluations(
+    db: AsyncSession,
+    *,
+    analysis: AnalysisRun,
+    company_profile_version_id: str,
+) -> dict[str, Evaluation] | None:
+    semantic_ids = {
+        str(condition.get("condition_id") or condition.get("conditionId"))
+        for condition in (analysis.canonical_ir or {}).get("conditions", [])
+        if isinstance(condition, dict) and condition.get("operator") == "SEMANTIC_MATCH"
+    }
+    if not semantic_ids:
+        return {}
+
+    stages = list(
+        (
+            await db.scalars(
+                select(AIStageRun).where(
+                    AIStageRun.analysis_run_id == analysis.id,
+                    AIStageRun.company_profile_version_id == company_profile_version_id,
+                    AIStageRun.stage.in_(["SEMANTIC_JUDGMENT", "FINAL_AI_VALIDATION"]),
+                    AIStageRun.error_code.is_(None),
+                )
+            )
+        ).all()
+    )
+    evaluations: dict[str, Evaluation] = {}
+    for stage in stages:
+        if stage.stage != "SEMANTIC_JUDGMENT" or not isinstance(stage.structured_output, dict):
+            continue
+        condition_id = stage.structured_output.get("condition_id")
+        status = stage.structured_output.get("status")
+        if condition_id in semantic_ids and status in {"PASS", "FAIL", "UNKNOWN"}:
+            evaluations[condition_id] = Evaluation(
+                ConditionStatus(status),
+                explanation=stage.structured_output.get("explanation"),
+            )
+    if set(evaluations) != semantic_ids:
+        return None
+
+    validation = next((stage for stage in stages if stage.stage == "FINAL_AI_VALIDATION"), None)
+    if validation is None:
+        return evaluations
+    output = validation.structured_output
+    if not isinstance(output, dict):
+        return None
+    result = output.get("result")
+    if result == "ACCEPT":
+        return evaluations
+    if result == "UNRESOLVED":
+        return {
+            condition_id: Evaluation(
+                ConditionStatus.UNKNOWN,
+                explanation="최종 AI 검증에서 의미판단을 확정하지 못했습니다.",
+            )
+            for condition_id in semantic_ids
+        }
+    if result != "CORRECT" or not isinstance(output.get("corrections"), list):
+        return None
+    for correction in output["corrections"]:
+        if not isinstance(correction, dict):
+            return None
+        condition_id = correction.get("condition_id")
+        status = correction.get("status")
+        if condition_id not in semantic_ids or status not in {"PASS", "FAIL", "UNKNOWN"}:
+            return None
+        evaluations[condition_id] = Evaluation(
+            ConditionStatus(status),
+            explanation="최종 AI 검증으로 의미판단을 정정했습니다.",
+        )
+    return evaluations
 
 
 def decision_reevaluate_handler(
@@ -123,8 +204,25 @@ def decision_reevaluate_handler(
                 )
                 selected_role = latest_role.role_key if latest_role else None
             analysis_id = analysis.id
+            semantic_evaluations = await _load_semantic_evaluations(
+                db,
+                analysis=analysis,
+                company_profile_version_id=payload.company_profile_version_id,
+            )
 
         async def publish(db: AsyncSession, _job) -> None:
+            if semantic_evaluations is None:
+                await enqueue_job(
+                    db,
+                    "ANNOUNCEMENT_ANALYZE",
+                    {
+                        "announcementId": payload.announcement_id,
+                        "announcementVersionId": payload.announcement_version_id,
+                        "companyProfileVersionId": payload.company_profile_version_id,
+                        "requestedByJobId": _job.id,
+                    },
+                )
+                return
             await publish_deterministic_decision(
                 db,
                 user_id=payload.user_id,
@@ -133,6 +231,7 @@ def decision_reevaluate_handler(
                 company_profile_version_id=payload.company_profile_version_id,
                 analysis_run_id=analysis_id,
                 selected_role_key=selected_role,
+                semantic_evaluations=semantic_evaluations,
             )
 
         return JobOutcome(publisher=publish)
@@ -170,6 +269,19 @@ def announcement_analyze_handler(
                     raise ValueError("Fixture announcement does not match requested announcement")
 
             return JobOutcome(publisher=publish)
+
+        async def publish_failure(db: AsyncSession, job) -> None:
+            if payload.announcement_id is None or payload.announcement_version_id is None:
+                return
+            await publish_analysis_failure(
+                db,
+                announcement_id=payload.announcement_id,
+                announcement_version_id=payload.announcement_version_id,
+                error_code=job.error_code or "ANALYSIS_FAILED",
+                company_profile_version_id=payload.company_profile_version_id,
+            )
+
+        context.final_failure_publisher = publish_failure
         if analyzer is None:
             raise AIExecutionError(
                 "AI_EXECUTOR_UNAVAILABLE",

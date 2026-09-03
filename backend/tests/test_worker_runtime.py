@@ -8,6 +8,7 @@ import pytest
 from app.config import Settings
 from app.pipeline.analyzer import ProductionAnnouncementAnalyzer
 from app.pipeline.collector import ProductionBizinfoCollector
+from app.pipeline.isolation import run_ai_runner_isolation_self_test
 from app.pipeline.processes import ProcessSupervisor
 from app.worker import _build_runtime, _scheduler_loop
 
@@ -56,6 +57,10 @@ async def test_runtime_injects_production_handlers(tmp_path) -> None:
         "BIZINFO_RECONCILE",
         "DECISION_REEVALUATE",
     }
+
+
+def test_toolless_ai_runner_isolation_contract_is_executable(tmp_path) -> None:
+    assert run_ai_runner_isolation_self_test(tmp_path / "ai-runner") is True
 
 
 @pytest.mark.asyncio

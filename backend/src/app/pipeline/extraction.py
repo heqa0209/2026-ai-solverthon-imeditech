@@ -14,6 +14,35 @@ class ExtractionFailure(ValueError):
         self.code = code
 
 
+def render_pdf_pages(
+    path: Path, output_directory: Path, *, max_pages: int = 50
+) -> tuple[tuple[Path, ...], bool]:
+    """Render a bounded set of PDF pages to PNG for vision OCR and verification."""
+
+    try:
+        import pypdfium2
+
+        output_directory.mkdir(parents=True, exist_ok=True)
+        images: list[Path] = []
+        with pypdfium2.PdfDocument(path) as document:
+            truncated = len(document) > max_pages
+            for index in range(min(len(document), max_pages)):
+                target = output_directory / f"page-{index + 1:04d}.png"
+                page = document[index]
+                try:
+                    bitmap = page.render(scale=2)
+                    try:
+                        bitmap.to_pil().save(target, format="PNG")
+                    finally:
+                        bitmap.close()
+                finally:
+                    page.close()
+                images.append(target)
+        return tuple(images), truncated
+    except Exception as exc:
+        raise ExtractionFailure("PDF_RENDER_FAILED", "Could not render PDF pages") from exc
+
+
 @dataclass(frozen=True)
 class TextSegment:
     text: str

@@ -27,6 +27,7 @@ class JobContext:
     queue: JobQueue
     supervisor: ProcessSupervisor = field(default_factory=ProcessSupervisor)
     lease_lost: asyncio.Event = field(default_factory=asyncio.Event)
+    final_failure_publisher: Publisher | None = None
 
     async def assert_lease(self) -> None:
         if self.lease_lost.is_set() or not await self.queue.lease_is_current(
@@ -151,6 +152,7 @@ class Worker:
                     error_code=exc.code,
                     error_message=str(exc),
                     retryable=exc.retryable,
+                    final_failure_publisher=context.final_failure_publisher,
                 )
         except Exception as exc:
             with contextlib.suppress(LostLeaseError):
@@ -160,6 +162,7 @@ class Worker:
                     error_code="UNHANDLED_JOB_ERROR",
                     error_message=str(exc),
                     retryable=False,
+                    final_failure_publisher=context.final_failure_publisher,
                 )
         finally:
             heartbeat.cancel()

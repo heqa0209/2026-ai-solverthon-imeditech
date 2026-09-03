@@ -44,7 +44,7 @@ PDF, HWP/HWPX, DOCX, XLSX, 이미지와 ZIP을 지원한다. ZIP은 한 단계�
 ## AI 실행 경계
 
 - FastAPI 요청 프로세스는 AI를 직접 실행하지 않고 PostgreSQL jobs와 별도 Python worker를 사용한다.
-- worker는 전용 OS 사용자로 실행하며 job 임시경로와 Codex 인증·상태 저장소 외 프로젝트, 원본, 운영 secret을 읽지 못한다.
+- 신뢰된 Python worker coordinator는 DB, 원본 저장소와 주입된 운영 secret을 읽어 수집·추출을 수행한다. 비신뢰 문서를 해석하는 `codex exec` 자식만 job 임시경로와 Codex 인증·상태 저장소 외 프로젝트, 원본, 운영 secret에 접근하지 못한다.
 - `codex exec`는 shell 문자열이 아닌 인자 배열로 호출하고 단계마다 독립된 ephemeral session을 사용한다.
 - 고정 프롬프트, 고정 JSON Schema와 tool-less 실행을 사용한다. 모델에는 파일, DB, 셸, MCP나 웹 도구를 제공하지 않는다.
 - 구조화 출력의 모든 object는 `additionalProperties: false`이며 모든 property를 required에 넣고 선택값은 nullable로 표현한다.
@@ -53,7 +53,7 @@ PDF, HWP/HWPX, DOCX, XLSX, 이미지와 ZIP을 지원한다. ZIP은 한 단계�
 
 기본 호출은 `codex exec --ignore-user-config --ignore-rules --sandbox read-only --cd <temp> --skip-git-repo-check --ephemeral`에 모델, effort, output schema와 구조화 입력을 추가한다. subprocess 환경변수는 locale, 임시경로와 인증에 필요한 값만 허용하고 애플리케이션 secret은 제거한다.
 
-worker 시작 시 프로젝트·secret 읽기, 임시경로 밖 쓰기와 임의 명령 실행이 실패하는지 self-test한다. Codex 인증·상태 DB는 정상 실행에 필요한 범위에서 쓸 수 있어야 한다. self-test가 실패하면 readiness를 실패시키고 job을 claim하지 않는다.
+worker 시작 시 실제 모델 호출 없이 `codex exec` 자식의 환경 allowlist, job 임시경로, read-only sandbox, ephemeral session과 모든 도구 비활성화를 self-test한다. coordinator가 원본을 검증해 bounded 입력과 임시 이미지 복사본만 자식에 전달한다. Codex 인증·상태 DB는 정상 실행에 필요한 범위에서 쓸 수 있어야 한다. self-test가 실패하면 readiness를 실패시키고 job을 claim하지 않는다.
 
 ## 모델과 effort
 

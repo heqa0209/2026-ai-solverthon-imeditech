@@ -10,14 +10,14 @@ from pathlib import Path
 
 import httpx
 
-from app.config import REPO_ROOT, Settings, get_settings
+from app.config import Settings, get_settings
 from app.db import SessionFactory, engine
 from app.pipeline.ai import CodexExecutor
 from app.pipeline.analyzer import ProductionAnnouncementAnalyzer
 from app.pipeline.bizinfo import BizinfoClient
 from app.pipeline.collector import ProductionBizinfoCollector
 from app.pipeline.handlers import build_handler_registry
-from app.pipeline.isolation import FilesystemIsolationPolicy, run_filesystem_isolation_self_test
+from app.pipeline.isolation import run_ai_runner_isolation_self_test
 from app.pipeline.jobs import JobQueue
 from app.pipeline.processes import ProcessSupervisor
 from app.pipeline.scheduler import enqueue_due_collection_jobs
@@ -36,15 +36,6 @@ class WorkerRuntime:
 
 def _worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
-
-
-def _isolation_policy(source_storage_root: Path) -> FilesystemIsolationPolicy:
-    temp_root = Path(tempfile.gettempdir()) / "solverthon-ai-worker"
-    return FilesystemIsolationPolicy(
-        temp_root=temp_root,
-        forbidden_read_paths=(REPO_ROOT / ".env", REPO_ROOT / "docs", source_storage_root),
-        forbidden_write_path=REPO_ROOT / ".worker-isolation-probe",
-    )
 
 
 def _build_runtime(
@@ -71,10 +62,10 @@ def _build_runtime(
         ),
         source_storage_root=settings.source_storage_root,
     )
-    policy = _isolation_policy(settings.source_storage_root)
+    temp_root = Path(tempfile.gettempdir()) / "solverthon-ai-worker"
 
     async def isolation_check() -> bool:
-        return await asyncio.to_thread(run_filesystem_isolation_self_test, policy)
+        return await asyncio.to_thread(run_ai_runner_isolation_self_test, temp_root)
 
     worker = Worker(
         worker_id=_worker_id(),

@@ -4,12 +4,14 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from pypdf import PdfWriter
 
 from app.pipeline.extraction import (
     NativeExtraction,
     TextSegment,
     decide_ocr,
     extract_native,
+    render_pdf_pages,
 )
 
 
@@ -55,3 +57,18 @@ def test_empty_ocr_capable_format_requests_ocr(tmp_path: Path, suffix: str) -> N
     decision = decide_ocr(tmp_path / f"scan{suffix}", NativeExtraction((), suffix[1:].upper()))
     assert decision.required is True
     assert decision.reason == "NO_NATIVE_TEXT"
+
+
+def test_pdf_pages_are_rendered_to_bounded_png_inputs(tmp_path: Path) -> None:
+    source = tmp_path / "scan.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    writer.add_blank_page(width=200, height=200)
+    with source.open("wb") as output:
+        writer.write(output)
+
+    images, truncated = render_pdf_pages(source, tmp_path / "rendered", max_pages=1)
+
+    assert len(images) == 1
+    assert images[0].read_bytes().startswith(b"\x89PNG")
+    assert truncated is True

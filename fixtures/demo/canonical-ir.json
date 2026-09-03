@@ -14,7 +14,7 @@
       "parent_group_id": null,
       "operator": "ALL",
       "track_ids": ["general"],
-      "role_ids": []
+      "role_keys": []
     }
   ],
   "conditions": [

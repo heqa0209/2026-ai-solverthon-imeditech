@@ -129,7 +129,7 @@ class Track(StrictIRModel):
 
 
 class Role(StrictIRModel):
-    role_id: str
+    role_key: str
     label: str
 
 
@@ -138,7 +138,7 @@ class ConditionGroup(StrictIRModel):
     parent_group_id: str | None
     operator: GroupOperator
     track_ids: list[str]
-    role_ids: list[str]
+    role_keys: list[str]
 
 
 class Evidence(StrictIRModel):
@@ -174,6 +174,9 @@ class Question(StrictIRModel):
     condition_id: str
     prompt: str
     answer_type: Literal["STRING", "INTEGER", "DATE", "BOOLEAN", "STRING_SET"]
+    options: list[str] | None
+    unit: str | None
+    evidence: list[Evidence] = Field(min_length=1)
 
 
 class CanonicalIR(StrictIRModel):
@@ -188,7 +191,7 @@ class CanonicalIR(StrictIRModel):
     @model_validator(mode="after")
     def references_exist(self) -> CanonicalIR:
         track_ids = {track.track_id for track in self.tracks}
-        role_ids = {role.role_id for role in self.roles}
+        role_keys = {role.role_key for role in self.roles}
         group_ids = {group.group_id for group in self.groups}
         condition_ids = {condition.condition_id for condition in self.conditions}
         if len(group_ids) != len(self.groups) or len(condition_ids) != len(self.conditions):
@@ -196,7 +199,7 @@ class CanonicalIR(StrictIRModel):
         for group in self.groups:
             if group.parent_group_id is not None and group.parent_group_id not in group_ids:
                 raise ValueError(f"Unknown parent group: {group.parent_group_id}")
-            if not set(group.track_ids) <= track_ids or not set(group.role_ids) <= role_ids:
+            if not set(group.track_ids) <= track_ids or not set(group.role_keys) <= role_keys:
                 raise ValueError(f"Unknown track or role in group: {group.group_id}")
         if any(condition.group_id not in group_ids for condition in self.conditions):
             raise ValueError("Condition references an unknown group")

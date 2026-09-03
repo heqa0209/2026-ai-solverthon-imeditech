@@ -193,6 +193,8 @@ class AnnouncementListItem(StrictModel):
     id: str
     announcementVersionId: str
     companyProfileVersionId: str | None
+    decisionId: str | None
+    decisionPublishedAt: datetime | None
     title: str
     agencyName: str | None
     recruitmentStartsOn: date | None

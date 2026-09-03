@@ -68,15 +68,57 @@ async def seed_announcement(session_factory, *, decision_user: str = "demo.user"
             status="SUCCEEDED",
             analysis_version="v1",
             canonical_ir={
-                "roles": [{"role_key": "LEAD", "label": "주관기관", "eligibility": "ELIGIBLE"}],
+                "roles": [
+                    {"role_key": "LEAD", "label": "주관기관"},
+                    {"role_key": "PARTNER", "label": "참여기관"},
+                ],
+                "groups": [
+                    {
+                        "group_id": "lead",
+                        "parent_group_id": None,
+                        "operator": "ALL",
+                        "role_keys": ["LEAD"],
+                    },
+                    {
+                        "group_id": "partner",
+                        "parent_group_id": None,
+                        "operator": "ALL",
+                        "role_keys": ["PARTNER"],
+                    },
+                ],
+                "conditions": [
+                    {
+                        "condition_id": "lead-scale",
+                        "group_id": "lead",
+                        "kind": "MANDATORY",
+                        "subject": "COMPANY_SCALE",
+                        "operator": "EQ",
+                        "expected_value": {"type": "ENUM", "value": "SMALL"},
+                    },
+                    {
+                        "condition_id": "partner-scale",
+                        "group_id": "partner",
+                        "kind": "MANDATORY",
+                        "subject": "COMPANY_SCALE",
+                        "operator": "EQ",
+                        "expected_value": {"type": "ENUM", "value": "MEDIUM"},
+                    },
+                ],
                 "questions": [
                     {
                         "condition_id": "scale-condition",
                         "prompt": "기업규모를 확인해 주세요.",
-                        "value_type": "ENUM",
-                        "options": ["SMALL", "MEDIUM"],
+                        "answer_type": "INTEGER",
+                        "options": None,
+                        "unit": "명",
                         "evidence": [
-                            {"verbatim_text": "소기업이어야 합니다.", "source_name": "공고 본문"}
+                            {
+                                "source_file_id": None,
+                                "source_version": "fixture-v1",
+                                "page": None,
+                                "verbatim_text": "소기업이어야 합니다.",
+                                "source_priority": 10,
+                            }
                         ],
                     }
                 ],
@@ -146,6 +188,8 @@ async def seed_announcement(session_factory, *, decision_user: str = "demo.user"
             "version": version.id,
             "condition": condition.id,
             "file": source_file.id,
+            "decision": decision.id,
+            "decision_published_at": decision.created_at.isoformat(),
         }
 
 
@@ -162,14 +206,40 @@ def test_list_detail_interest_and_attachment_authorization(
     assert page.json()["total"] == 1
     assert page.json()["items"][0]["eligibility"] == "ELIGIBLE"
     assert page.json()["items"][0]["recruitmentStatus"] == "OPEN"
+    assert page.json()["items"][0]["decisionId"] == seeded["decision"]
+    assert page.json()["items"][0]["decisionPublishedAt"] == seeded["decision_published_at"]
 
     detail = client.get(f"/api/v1/announcements/{seeded['announcement']}")
     assert detail.status_code == 200
     body = detail.json()
     assert body["conditions"][0]["status"] == "PASS"
+    assert body["decisionId"] == seeded["decision"]
+    assert body["decisionPublishedAt"] == seeded["decision_published_at"]
     assert body["conditions"][0]["evidence"][0]["verbatimText"] == "소기업이어야 합니다."
     assert body["files"][0]["failureCode"] == "FIXTURE_NOT_DOWNLOADED"
-    assert body["rolePredictions"][0]["roleKey"] == "LEAD"
+    assert body["rolePredictions"] == [
+        {"roleKey": "LEAD", "label": "주관기관", "eligibility": "ELIGIBLE"},
+        {"roleKey": "PARTNER", "label": "참여기관", "eligibility": "INELIGIBLE"},
+    ]
+    assert body["questions"] == [
+        {
+            "conditionId": seeded["condition"],
+            "prompt": "기업규모를 확인해 주세요.",
+            "valueType": "INTEGER",
+            "options": None,
+            "unit": "명",
+            "evidence": [
+                {
+                    "sourceFileId": None,
+                    "sourceVersion": "fixture-v1",
+                    "sourceName": None,
+                    "page": None,
+                    "verbatimText": "소기업이어야 합니다.",
+                    "sourcePriority": 10,
+                }
+            ],
+        }
+    ]
     assert client.get("/api/v1/announcements?interestStatus=ANY_SET").json()["total"] == 0
 
     interested = client.put(
@@ -204,10 +274,22 @@ def test_role_answer_and_reevaluate_are_idempotent_and_version_checked(
     assert first.json()["requestId"] == second.json()["requestId"]
 
     answer_path = f"/api/v1/announcements/{seeded['announcement']}/answers"
+    invalid_answer = client.post(
+        answer_path,
+        json={
+            "announcementVersionId": seeded["version"],
+            "conditionId": seeded["condition"],
+            "value": "7",
+            "source": "USER_VERIFIED",
+        },
+        headers=headers(csrf),
+    )
+    assert invalid_answer.status_code == 422
+    assert invalid_answer.json()["code"] == "ANSWER_TYPE_INVALID"
     answer = {
         "announcementVersionId": seeded["version"],
         "conditionId": seeded["condition"],
-        "value": "SMALL",
+        "value": 7,
         "source": "USER_VERIFIED",
     }
     answer_first = client.post(answer_path, json=answer, headers=headers(csrf))

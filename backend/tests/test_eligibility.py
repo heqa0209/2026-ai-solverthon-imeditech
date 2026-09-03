@@ -69,17 +69,65 @@ def test_missing_or_unconvertible_is_unknown_and_mismatch_is_fail() -> None:
     )
 
 
+def test_tagged_range_expected_value_is_evaluated_against_inner_bounds() -> None:
+    revenue_range = condition(
+        "ANNUAL_REVENUE",
+        "BETWEEN",
+        {"type": "RANGE", "value": {"minimum": 10, "maximum": 20}},
+    )
+    assert evaluate_condition({"annualRevenue": 15}, revenue_range).status == ConditionStatus.PASS
+    assert evaluate_condition({"annualRevenue": 21}, revenue_range).status == ConditionStatus.FAIL
+    assert evaluate_condition({}, revenue_range).status == ConditionStatus.UNKNOWN
+
+
 def test_role_selection_and_multiple_paths() -> None:
     ir = {
-        "roles": [{"role_key": "LEAD"}],
-        "groups": [{"group_id": "root", "operator": "ALL", "role_key": "LEAD"}],
+        "roles": [{"role_key": "LEAD"}, {"role_key": "PARTNER"}],
+        "groups": [
+            {
+                "group_id": "lead",
+                "parent_group_id": None,
+                "operator": "ALL",
+                "role_keys": ["LEAD"],
+            },
+            {
+                "group_id": "partner",
+                "parent_group_id": None,
+                "operator": "ALL",
+                "role_keys": ["PARTNER"],
+            },
+        ],
         "conditions": [
             {
-                **condition("COMPANY_SCALE", "EQ", {"type": "ENUM", "value": "SMALL"}),
-                "role_key": "LEAD",
-            }
+                **condition(
+                    "COMPANY_SCALE",
+                    "EQ",
+                    {"type": "ENUM", "value": "SMALL"},
+                    key="lead-scale",
+                ),
+                "group_id": "lead",
+            },
+            {
+                **condition(
+                    "COMPANY_SCALE",
+                    "EQ",
+                    {"type": "ENUM", "value": "MEDIUM"},
+                    key="partner-scale",
+                ),
+                "group_id": "partner",
+            },
         ],
     }
-    assert evaluate_decision(ir, {"companyScale": "SMALL"}).verdict == Verdict.NEEDS_CONFIRMATION
+    unselected = evaluate_decision(ir, {"companyScale": "SMALL"})
+    assert unselected.verdict == Verdict.NEEDS_CONFIRMATION
+    assert {result.status for result in unselected.conditions.values()} == {
+        ConditionStatus.NOT_APPLICABLE
+    }
     selected = evaluate_decision(ir, {"companyScale": "SMALL"}, "LEAD")
     assert selected.verdict == Verdict.ELIGIBLE
+    assert selected.conditions["lead-scale"].status == ConditionStatus.PASS
+    assert selected.conditions["partner-scale"].status == ConditionStatus.NOT_APPLICABLE
+    partner = evaluate_decision(ir, {"companyScale": "SMALL"}, "PARTNER")
+    assert partner.verdict == Verdict.INELIGIBLE
+    assert partner.conditions["lead-scale"].status == ConditionStatus.NOT_APPLICABLE
+    assert partner.conditions["partner-scale"].status == ConditionStatus.FAIL

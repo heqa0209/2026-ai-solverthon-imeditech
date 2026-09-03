@@ -45,7 +45,7 @@ def _expected_value(expected: dict[str, Any] | None) -> Any:
         return None
     value_type = expected.get("type")
     if value_type == "RANGE":
-        return expected
+        return expected.get("value")
     for key in ("value", "values", "codes"):
         if key in expected:
             return expected[key]
@@ -212,24 +212,49 @@ def evaluate_decision(
     selected_role_key: str | None = None,
     condition_values: dict[str, object] | None = None,
 ) -> DecisionEvaluation:
-    roles = canonical_ir.get("roles", [])
-    role_keys = {
-        role.get("role_key") or role.get("roleKey") for role in roles if isinstance(role, dict)
-    }
-    role_keys.discard(None)
-    if role_keys and selected_role_key is None:
-        return DecisionEvaluation(Verdict.NEEDS_CONFIRMATION, None, {})
-    if selected_role_key is not None and role_keys and selected_role_key not in role_keys:
-        return DecisionEvaluation(Verdict.NEEDS_CONFIRMATION, None, {})
-
     conditions = [item for item in canonical_ir.get("conditions", []) if isinstance(item, dict)]
     mandatory = [item for item in conditions if item.get("kind") == "MANDATORY"]
+
+    def role_selection_required() -> DecisionEvaluation:
+        evaluations = {
+            str(item.get("condition_id") or item.get("conditionId")): Evaluation(
+                ConditionStatus.NOT_APPLICABLE
+            )
+            for item in mandatory
+        }
+        return DecisionEvaluation(Verdict.NEEDS_CONFIRMATION, None, evaluations)
+
+    roles = canonical_ir.get("roles", [])
+    role_keys = {
+        role.get("role_key") for role in roles if isinstance(role, dict) and role.get("role_key")
+    }
+    if role_keys and selected_role_key is None:
+        return role_selection_required()
+    if selected_role_key is not None and selected_role_key not in role_keys:
+        return role_selection_required()
+
+    groups = [item for item in canonical_ir.get("groups", []) if isinstance(item, dict)]
+    group_by_id = {str(item.get("group_id") or item.get("groupId")): item for item in groups}
+
+    def group_applies(group_id: str, visiting: set[str] | None = None) -> bool:
+        visiting = set() if visiting is None else visiting
+        if group_id in visiting:
+            return False
+        group = group_by_id.get(group_id)
+        if group is None:
+            return True
+        applicable_roles = group.get("role_keys", [])
+        if applicable_roles and selected_role_key not in applicable_roles:
+            return False
+        parent = group.get("parent_group_id") or group.get("parentGroupId")
+        return parent is None or group_applies(str(parent), visiting | {group_id})
+
     evaluations: dict[str, Evaluation] = {}
     applicable_conditions: list[dict[str, Any]] = []
     for condition in mandatory:
         condition_id = str(condition.get("condition_id") or condition.get("conditionId"))
-        condition_role = condition.get("role_key") or condition.get("roleKey")
-        if condition_role and condition_role != selected_role_key:
+        group_id = str(condition.get("group_id") or condition.get("groupId"))
+        if not group_applies(group_id):
             evaluations[condition_id] = Evaluation(ConditionStatus.NOT_APPLICABLE)
             continue
         condition_profile = profile
@@ -240,8 +265,6 @@ def evaluate_decision(
         evaluations[condition_id] = evaluate_condition(condition_profile, condition)
         applicable_conditions.append(condition)
 
-    groups = [item for item in canonical_ir.get("groups", []) if isinstance(item, dict)]
-    group_by_id = {str(item.get("group_id") or item.get("groupId")): item for item in groups}
     condition_groups: dict[str, list[ConditionStatus]] = {}
     for condition in applicable_conditions:
         condition_id = str(condition.get("condition_id") or condition.get("conditionId"))
@@ -259,7 +282,7 @@ def evaluate_decision(
         statuses = list(condition_groups.get(group_id, []))
         for child_id, child in group_by_id.items():
             parent = child.get("parent_group_id") or child.get("parentGroupId")
-            if parent is not None and str(parent) == group_id:
+            if parent is not None and str(parent) == group_id and group_applies(child_id):
                 statuses.append(group_status(child_id, visiting | {group_id}))
         status = aggregate(str(group.get("operator", "ALL")), statuses)
         group_statuses[group_id] = status
@@ -269,10 +292,7 @@ def evaluate_decision(
         (group_id, group)
         for group_id, group in group_by_id.items()
         if not (group.get("parent_group_id") or group.get("parentGroupId"))
-        and (
-            not (group.get("role_key") or group.get("roleKey"))
-            or (group.get("role_key") or group.get("roleKey")) == selected_role_key
-        )
+        and group_applies(group_id)
     ]
     path_statuses: list[ConditionStatus] = []
     passed_track = None
@@ -280,7 +300,8 @@ def evaluate_decision(
         status = group_status(group_id, set())
         path_statuses.append(status)
         if status == ConditionStatus.PASS and passed_track is None:
-            passed_track = group.get("track_key") or group.get("trackKey")
+            track_ids = group.get("track_ids", [])
+            passed_track = track_ids[0] if len(track_ids) == 1 else None
 
     if not roots and applicable_conditions:
         path_statuses = [

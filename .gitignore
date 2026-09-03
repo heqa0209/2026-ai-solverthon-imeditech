@@ -1,0 +1,39 @@
+.env
+.env.*
+!.env.example
+.DS_Store
+.ouroboros/
+graphify-out/
+.worktrees/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+dist/
+build/
+
+# Node
+node_modules/
+frontend/dist/
+frontend/playwright-report/
+frontend/test-results/
+coverage/
+
+# Runtime data and secrets
+storage/
+runtime/
+tmp/
+*.pid
+infra/cloudflared/config.local.yml
+infra/cloudflared/*.json
+
+# Editors
+.idea/
+.vscode/
+*.swp

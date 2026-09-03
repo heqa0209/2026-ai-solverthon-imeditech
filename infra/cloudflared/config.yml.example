@@ -1,0 +1,7 @@
+tunnel: 18a9990d-1ff6-438a-bbbc-1276ce96ae29
+credentials-file: /replace/with/private/cloudflared-credentials.json
+
+ingress:
+  - hostname: api.ai-solverthon-2026-imt.party
+    service: http://127.0.0.1:8000
+  - service: http_status:404

@@ -37,7 +37,7 @@ PDF, HWP/HWPX, DOCX, XLSX, 이미지와 ZIP을 지원한다. ZIP은 한 단계�
 2. 텍스트를 추출하지 못한 파일만 페이지 이미지 또는 파일 내용으로 OCR한다.
 3. 판정을 좌우하는 OCR 근거만 독립 AI 검증을 거친다.
 
-승인된 예외로, PDF에서 네이티브 텍스트가 한 부분이라도 추출되면 이미지 전용 페이지를 찾기 위한 추가 OCR을 하지 않는다. 근거 위치는 PDF·이미지의 페이지 번호, Office 문서의 파일명을 사용한다.
+승인된 예외로, PDF에서 네이티브 텍스트가 한 부분이라도 추출되면 이미지 전용 페이지를 찾기 위한 추가 OCR을 하지 않는다. OCR 출력은 전달한 이미지 수와 정확히 일치하는 `pages[{page,text}]` 배열이어야 하며 페이지 누락·중복·범위 초과는 실패로 처리한다. 근거 위치는 PDF·이미지의 페이지 번호, Office 문서의 파일명을 사용한다.
 
 출처가 충돌하면 `최신 정정·추가 공고 > 본 공고문 > 상세 안내서 > 기타 첨부 > 기업마당 API 요약` 순서로 적용한다. 결정적 조건의 인용문이 저장된 추출문에 실제로 존재하는지 코드로 검증한다.
 
@@ -90,6 +90,8 @@ DB에는 구조화 출력, 모델, effort, 프롬프트·스키마 버전, 입�
 - `questions[]`: UNKNOWN을 해소할 질문, 답변 자료형과 condition ID
 
 `subject`는 `BUSINESS_ENTITY_TYPE | ORGANIZATION_TYPE | COMPANY_SCALE | FOUNDED_ON | ELIGIBLE_REGION | PRIMARY_INDUSTRY | SECONDARY_INDUSTRY | ANNUAL_REVENUE | EMPLOYEE_COUNT | DELINQUENCY_STATUS | CERTIFICATION | SUPPORT_HISTORY | CAPABILITY_TAG | OTHER`의 폐쇄 enum이다. `operator`는 `EQ | NE | IN | NOT_IN | LT | LTE | GT | GTE | BETWEEN | CONTAINS | NOT_CONTAINS | EXISTS | SEMANTIC_MATCH`다. `expected_value`는 `STRING | INTEGER | DATE | ENUM | REGION_SET | STRING_SET | RANGE | BOOLEAN` 타입 태그와 해당 값을 가진 union이며 비교 불가능한 `OTHER`는 nullable 값과 원문 근거를 남긴다.
+
+subject·operator·expected type·unit도 폐쇄 조합이다. enum 필드는 `EQ/NE + ENUM` 또는 `IN/NOT_IN + STRING_SET`, 날짜는 날짜 비교와 `DATE`, 지역은 `IN/NOT_IN + REGION_SET`, 매출·인원은 수치 비교와 `INTEGER` 또는 `BETWEEN + RANGE`만 허용한다. 매출 단위는 `원`, 인원 단위는 `명`이어야 하고 다른 필드는 단위를 갖지 않는다. 문자열·문자열 집합 필드는 선언된 동등·포함·집합·의미 비교만 허용한다. `EXISTS`는 expected value와 unit 없이 사용하고 `OTHER`는 `SEMANTIC_MATCH`만 허용한다. 이 조합을 벗어난 모델 출력은 판정 전에 schema 오류로 종료해 자동 `INELIGIBLE` 근거로 사용하지 않는다.
 
 프롬프트는 문서 내용을 data delimiter 안에 넣고 IR 생성 외 행동을 요구하지 않는다. prompt와 schema는 독립 버전 파일로 관리하며 입력·프롬프트·스키마·모델·effort가 idempotency hash에 포함된다.
 

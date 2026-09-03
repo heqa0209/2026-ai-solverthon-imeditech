@@ -123,6 +123,97 @@ ExpectedValue = Annotated[
 ]
 
 
+_EXPECTED_TYPE_BY_MODEL = {
+    StringExpected: "STRING",
+    IntegerExpected: "INTEGER",
+    DateExpected: "DATE",
+    EnumExpected: "ENUM",
+    RegionSetExpected: "REGION_SET",
+    StringSetExpected: "STRING_SET",
+    RangeExpected: "RANGE",
+    BooleanExpected: "BOOLEAN",
+}
+
+_ENUM_SUBJECTS = {
+    Subject.BUSINESS_ENTITY_TYPE,
+    Subject.ORGANIZATION_TYPE,
+    Subject.COMPANY_SCALE,
+    Subject.DELINQUENCY_STATUS,
+}
+_STRING_SUBJECTS = {Subject.PRIMARY_INDUSTRY}
+_STRING_COLLECTION_SUBJECTS = {
+    Subject.SECONDARY_INDUSTRY,
+    Subject.CERTIFICATION,
+    Subject.SUPPORT_HISTORY,
+    Subject.CAPABILITY_TAG,
+}
+
+
+def _condition_shapes() -> dict[Subject, dict[ConditionOperator, tuple[type[StrictIRModel], ...]]]:
+    enum_shapes = {
+        ConditionOperator.EQ: (EnumExpected,),
+        ConditionOperator.NE: (EnumExpected,),
+        ConditionOperator.IN: (StringSetExpected,),
+        ConditionOperator.NOT_IN: (StringSetExpected,),
+    }
+    string_shapes = {
+        ConditionOperator.EQ: (StringExpected,),
+        ConditionOperator.NE: (StringExpected,),
+        ConditionOperator.IN: (StringSetExpected,),
+        ConditionOperator.NOT_IN: (StringSetExpected,),
+        ConditionOperator.CONTAINS: (StringExpected,),
+        ConditionOperator.NOT_CONTAINS: (StringExpected,),
+        ConditionOperator.SEMANTIC_MATCH: (StringExpected,),
+    }
+    collection_shapes = {
+        ConditionOperator.IN: (StringSetExpected,),
+        ConditionOperator.NOT_IN: (StringSetExpected,),
+        ConditionOperator.CONTAINS: (StringExpected,),
+        ConditionOperator.NOT_CONTAINS: (StringExpected,),
+        ConditionOperator.SEMANTIC_MATCH: (StringExpected,),
+    }
+    numeric_shapes = {
+        ConditionOperator.EQ: (IntegerExpected,),
+        ConditionOperator.NE: (IntegerExpected,),
+        ConditionOperator.LT: (IntegerExpected,),
+        ConditionOperator.LTE: (IntegerExpected,),
+        ConditionOperator.GT: (IntegerExpected,),
+        ConditionOperator.GTE: (IntegerExpected,),
+        ConditionOperator.BETWEEN: (RangeExpected,),
+    }
+    shapes: dict[Subject, dict[ConditionOperator, tuple[type[StrictIRModel], ...]]] = {
+        subject: dict(enum_shapes) for subject in _ENUM_SUBJECTS
+    }
+    shapes.update({subject: dict(string_shapes) for subject in _STRING_SUBJECTS})
+    shapes.update({subject: dict(collection_shapes) for subject in _STRING_COLLECTION_SUBJECTS})
+    shapes[Subject.FOUNDED_ON] = {
+        operator: (DateExpected,)
+        for operator in (
+            ConditionOperator.EQ,
+            ConditionOperator.NE,
+            ConditionOperator.LT,
+            ConditionOperator.LTE,
+            ConditionOperator.GT,
+            ConditionOperator.GTE,
+        )
+    }
+    shapes[Subject.ELIGIBLE_REGION] = {
+        ConditionOperator.IN: (RegionSetExpected,),
+        ConditionOperator.NOT_IN: (RegionSetExpected,),
+    }
+    shapes[Subject.ANNUAL_REVENUE] = dict(numeric_shapes)
+    shapes[Subject.EMPLOYEE_COUNT] = dict(numeric_shapes)
+    shapes[Subject.OTHER] = {ConditionOperator.SEMANTIC_MATCH: (StringExpected, BooleanExpected)}
+    return shapes
+
+
+_CONDITION_SHAPES = _condition_shapes()
+_SUBJECT_UNITS = {
+    Subject.ANNUAL_REVENUE: "원",
+    Subject.EMPLOYEE_COUNT: "명",
+}
+
+
 class Track(StrictIRModel):
     track_id: str
     label: str
@@ -161,9 +252,44 @@ class Condition(StrictIRModel):
     evidence: list[Evidence]
 
     @model_validator(mode="after")
-    def other_is_not_automatically_comparable(self) -> Condition:
-        if self.subject is Subject.OTHER and self.operator is not ConditionOperator.SEMANTIC_MATCH:
-            raise ValueError("OTHER conditions must use SEMANTIC_MATCH")
+    def validate_comparison_shape(self) -> Condition:
+        required_unit = _SUBJECT_UNITS.get(self.subject)
+        if self.operator is ConditionOperator.EXISTS:
+            if self.subject is Subject.OTHER:
+                raise ValueError("OTHER conditions must use SEMANTIC_MATCH")
+            if self.expected_value is not None:
+                raise ValueError("EXISTS conditions must not have an expected value")
+            if self.unit is not None:
+                raise ValueError("EXISTS conditions must not have a unit")
+        else:
+            allowed_types = _CONDITION_SHAPES[self.subject].get(self.operator)
+            if allowed_types is None:
+                raise ValueError(
+                    f"{self.subject.value} does not support operator {self.operator.value}"
+                )
+            nullable_other = (
+                self.subject is Subject.OTHER and self.operator is ConditionOperator.SEMANTIC_MATCH
+            )
+            if (self.expected_value is None and not nullable_other) or (
+                self.expected_value is not None
+                and not isinstance(self.expected_value, allowed_types)
+            ):
+                allowed_names = ", ".join(_EXPECTED_TYPE_BY_MODEL[item] for item in allowed_types)
+                actual_name = (
+                    "null"
+                    if self.expected_value is None
+                    else _EXPECTED_TYPE_BY_MODEL[type(self.expected_value)]
+                )
+                raise ValueError(
+                    f"{self.subject.value}/{self.operator.value} requires expected type "
+                    f"{allowed_names}; got {actual_name}"
+                )
+            if required_unit is not None and self.unit != required_unit:
+                raise ValueError(
+                    f"{self.subject.value} requires unit {required_unit}; got {self.unit!r}"
+                )
+            if required_unit is None and self.unit is not None:
+                raise ValueError(f"{self.subject.value} conditions must not have a unit")
         if not self.evidence:
             raise ValueError("Every public condition requires evidence")
         return self

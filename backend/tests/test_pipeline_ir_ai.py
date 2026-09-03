@@ -128,6 +128,80 @@ def test_ir_rejects_unknown_subject_extra_fields_and_missing_evidence() -> None:
         CanonicalIR.model_validate(missing)
 
 
+@pytest.mark.parametrize(
+    ("subject", "operator", "expected_value", "unit"),
+    [
+        ("COMPANY_SCALE", "EQ", {"type": "ENUM", "value": "SMALL"}, None),
+        (
+            "BUSINESS_ENTITY_TYPE",
+            "IN",
+            {"type": "STRING_SET", "value": ["CORPORATION", "SOLE_PROPRIETOR"]},
+            None,
+        ),
+        ("FOUNDED_ON", "GTE", {"type": "DATE", "value": "2020-01-01"}, None),
+        ("ELIGIBLE_REGION", "IN", {"type": "REGION_SET", "value": ["11"]}, None),
+        ("PRIMARY_INDUSTRY", "SEMANTIC_MATCH", {"type": "STRING", "value": "바이오"}, None),
+        (
+            "CERTIFICATION",
+            "NOT_IN",
+            {"type": "STRING_SET", "value": ["제외 인증"]},
+            None,
+        ),
+        ("ANNUAL_REVENUE", "LTE", {"type": "INTEGER", "value": 100_000_000}, "원"),
+        (
+            "EMPLOYEE_COUNT",
+            "BETWEEN",
+            {"type": "RANGE", "value": {"minimum": 5, "maximum": 10}},
+            "명",
+        ),
+        ("CAPABILITY_TAG", "EXISTS", None, None),
+        ("OTHER", "SEMANTIC_MATCH", None, None),
+    ],
+)
+def test_canonical_ir_accepts_only_declared_valid_comparison_shapes(
+    subject: str,
+    operator: str,
+    expected_value: dict | None,
+    unit: str | None,
+) -> None:
+    data = valid_ir_data()
+    data["conditions"][0].update(
+        subject=subject,
+        operator=operator,
+        expected_value=expected_value,
+        unit=unit,
+    )
+    CanonicalIR.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("subject", "operator", "expected_value", "unit"),
+    [
+        ("COMPANY_SCALE", "LT", {"type": "ENUM", "value": "MEDIUM"}, None),
+        ("EMPLOYEE_COUNT", "LTE", {"type": "STRING", "value": "10"}, "명"),
+        ("ANNUAL_REVENUE", "LTE", {"type": "INTEGER", "value": 100}, "억원"),
+        ("EMPLOYEE_COUNT", "LTE", {"type": "INTEGER", "value": 10}, None),
+        ("COMPANY_SCALE", "EQ", {"type": "ENUM", "value": "SMALL"}, "명"),
+        ("OTHER", "EXISTS", None, None),
+    ],
+)
+def test_canonical_ir_rejects_incompatible_operator_expected_type_or_unit(
+    subject: str,
+    operator: str,
+    expected_value: dict | None,
+    unit: str | None,
+) -> None:
+    data = valid_ir_data()
+    data["conditions"][0].update(
+        subject=subject,
+        operator=operator,
+        expected_value=expected_value,
+        unit=unit,
+    )
+    with pytest.raises(ValidationError):
+        CanonicalIR.model_validate(data)
+
+
 def test_generated_ir_schema_closes_every_object() -> None:
     assert_closed_json_schema(CanonicalIR.model_json_schema())
     with pytest.raises(ValueError):

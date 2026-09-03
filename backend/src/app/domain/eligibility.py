@@ -292,6 +292,24 @@ def evaluate_decision(
             )
         elif (
             str(condition.get("operator", "")) == "SEMANTIC_MATCH"
+            and condition_values
+            and condition_id in condition_values
+        ):
+            explicit_answer = condition_values[condition_id]
+            if type(explicit_answer) is bool:
+                evaluations[condition_id] = Evaluation(
+                    ConditionStatus.PASS if explicit_answer else ConditionStatus.FAIL,
+                    used_value={"value": explicit_answer},
+                    explanation="사용자가 확인한 답변을 반영했습니다.",
+                )
+            else:
+                evaluations[condition_id] = Evaluation(
+                    ConditionStatus.UNKNOWN,
+                    used_value={"value": explicit_answer},
+                    explanation="사용자 답변을 의미판단에 다시 반영해야 합니다.",
+                )
+        elif (
+            str(condition.get("operator", "")) == "SEMANTIC_MATCH"
             and semantic_evaluations
             and condition_id in semantic_evaluations
         ):

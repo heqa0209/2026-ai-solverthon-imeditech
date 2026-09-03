@@ -229,8 +229,31 @@ class ProductionAnnouncementAnalyzer:
             },
             image_paths=images,
         )
-        text = stage.output.get("text")
-        if not isinstance(text, str) or not text.strip():
+        raw_pages = stage.output.get("pages")
+        pages: dict[int, str] = {}
+        if isinstance(raw_pages, list):
+            for item in raw_pages:
+                if not isinstance(item, dict):
+                    break
+                page = item.get("page")
+                page_text = item.get("text")
+                if (
+                    not isinstance(page, int)
+                    or isinstance(page, bool)
+                    or not isinstance(page_text, str)
+                    or page in pages
+                ):
+                    break
+                pages[page] = page_text
+        expected_pages = set(range(1, len(images) + 1))
+        if set(pages) != expected_pages:
+            raise AIExecutionError(
+                "OCR_OUTPUT_INVALID",
+                "OCR output must contain every supplied page exactly once",
+                retryable=False,
+            )
+        text = "\n".join(pages[page] for page in sorted(pages) if pages[page].strip())
+        if not text.strip():
             raise AIExecutionError(
                 "OCR_OUTPUT_INVALID", "OCR output did not contain text", retryable=False
             )
@@ -238,7 +261,7 @@ class ProductionAnnouncementAnalyzer:
             SourceAnalysis(
                 source,
                 text,
-                {1: text},
+                pages,
                 "SUCCEEDED",
                 None,
                 used_ocr=True,
@@ -290,18 +313,28 @@ class ProductionAnnouncementAnalyzer:
                 )
                 for row in source_rows
             )
-            profile_rows = list(
-                (
-                    await db.scalars(
-                        select(CompanyProfileVersion)
-                        .join(
-                            CompanyProfile,
-                            CompanyProfile.current_version_id == CompanyProfileVersion.id,
-                        )
-                        .where(CompanyProfile.current_version_id.is_not(None))
-                    )
-                ).all()
+            profile_query = (
+                select(CompanyProfileVersion)
+                .join(
+                    CompanyProfile,
+                    (CompanyProfile.current_version_id == CompanyProfileVersion.id)
+                    & (CompanyProfile.id == CompanyProfileVersion.profile_id)
+                    & (CompanyProfile.user_id == CompanyProfileVersion.user_id),
+                )
+                .where(CompanyProfile.current_version_id.is_not(None))
             )
+            target_profile_version_id = getattr(payload, "company_profile_version_id", None)
+            if target_profile_version_id is not None:
+                profile_query = profile_query.where(
+                    CompanyProfileVersion.id == target_profile_version_id
+                )
+            profile_rows = list((await db.scalars(profile_query)).all())
+            if target_profile_version_id is not None and not profile_rows:
+                raise AIExecutionError(
+                    "ANALYSIS_PROFILE_VERSION_INVALID",
+                    "Target company profile version is missing or no longer current",
+                    retryable=False,
+                )
             profiles = tuple(
                 ProfileInput(row.user_id, row.id, dict(row.snapshot)) for row in profile_rows
             )

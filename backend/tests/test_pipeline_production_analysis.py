@@ -5,6 +5,8 @@ import hashlib
 import os
 from pathlib import Path
 
+import pytest
+from pypdf import PdfWriter
 from sqlalchemy import select
 
 from app.jobs import enqueue_job
@@ -23,8 +25,14 @@ from app.models import (
     User,
 )
 from app.pipeline.ai import AI_STAGE_POLICIES, AIStage, FakeAIExecutor
-from app.pipeline.analyzer import ProductionAnnouncementAnalyzer
+from app.pipeline.analyzer import ProductionAnnouncementAnalyzer, SourceInput
 from app.pipeline.handlers import build_handler_registry
+from app.pipeline.ir import (
+    CanonicalIR,
+    EvidenceSource,
+    EvidenceValidationError,
+    validate_evidence,
+)
 from app.pipeline.jobs import JobQueue
 from app.pipeline.worker import Worker
 
@@ -262,7 +270,7 @@ def test_ocr_source_is_passed_as_bounded_image_and_stage_matrix_is_persisted(
         ir["conditions"][0]["evidence"][0]["page"] = 1
         fake = FakeAIExecutor(
             {
-                AIStage.OCR: {"text": ocr_text},
+                AIStage.OCR: {"pages": [{"page": 1, "text": ocr_text}]},
                 AIStage.CONDITION_EXTRACTION: ir,
                 AIStage.OCR_EVIDENCE_VALIDATION: {
                     "result": "ACCEPT",
@@ -336,6 +344,74 @@ def test_ocr_source_is_passed_as_bounded_image_and_stage_matrix_is_persisted(
     asyncio.run(scenario())
 
 
+def test_multi_page_pdf_ocr_preserves_page_evidence_boundaries(
+    session_factory, tmp_path: Path
+) -> None:
+    storage = tmp_path / "sources"
+    storage.mkdir()
+    pdf = storage / "scan.pdf"
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    writer.add_blank_page(width=200, height=200)
+    with pdf.open("wb") as output:
+        writer.write(output)
+    source_hash = hashlib.sha256(pdf.read_bytes()).hexdigest()
+    fake = FakeAIExecutor(
+        {
+            AIStage.OCR: {
+                "pages": [
+                    {"page": 1, "text": "표지입니다."},
+                    {"page": 2, "text": "지원 대상은 소기업입니다."},
+                ]
+            }
+        }
+    )
+    analyzer = ProductionAnnouncementAnalyzer(
+        sessions=session_factory,
+        executor=fake,
+        source_storage_root=storage,
+    )
+    source = SourceInput(
+        source_file_id="multi-page-pdf",
+        name="scan.pdf",
+        storage_path="scan.pdf",
+        sha256=source_hash,
+        source_priority=20,
+        download_status="SUCCEEDED",
+        extracted_text=None,
+    )
+    job_root = tmp_path / "job"
+    job_root.mkdir()
+
+    async def analyze():
+        return await analyzer._analyze_source(source, job_root)
+
+    analyzed, stage = asyncio.run(analyze())
+    assert stage is not None
+    assert analyzed.pages == {
+        1: "표지입니다.",
+        2: "지원 대상은 소기업입니다.",
+    }
+    assert analyzed.text == "표지입니다.\n지원 대상은 소기업입니다."
+    invocation = fake.invocations[0]
+    assert sum(value == "--image" for value in invocation.args) == 2
+
+    valid_ir_data = _canonical_ir(source.source_file_id, source_hash, analyzed.pages[2])
+    valid_ir_data["conditions"][0]["evidence"][0]["page"] = 2
+    evidence_source = EvidenceSource(
+        source_file_id=source.source_file_id,
+        source_version=source_hash,
+        text=analyzed.text,
+        pages=analyzed.pages,
+    )
+    validate_evidence(CanonicalIR.model_validate(valid_ir_data), [evidence_source])
+
+    wrong_page_data = _canonical_ir(source.source_file_id, source_hash, analyzed.pages[2])
+    wrong_page_data["conditions"][0]["evidence"][0]["page"] = 1
+    with pytest.raises(EvidenceValidationError):
+        validate_evidence(CanonicalIR.model_validate(wrong_page_data), [evidence_source])
+
+
 def test_incomplete_attachment_forces_safe_needs_confirmation(
     session_factory, tmp_path: Path
 ) -> None:
@@ -392,7 +468,7 @@ def test_unresolved_ocr_evidence_becomes_unknown_without_sol_override(
         ir["conditions"][0]["evidence"][0]["page"] = 1
         fake = FakeAIExecutor(
             {
-                AIStage.OCR: {"text": ocr_text},
+                AIStage.OCR: {"pages": [{"page": 1, "text": ocr_text}]},
                 AIStage.CONDITION_EXTRACTION: ir,
                 AIStage.OCR_EVIDENCE_VALIDATION: {
                     "result": "UNRESOLVED",

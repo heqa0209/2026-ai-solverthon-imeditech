@@ -113,6 +113,29 @@ def test_canonical_ir_is_closed_and_evidence_must_be_verbatim() -> None:
         validate_evidence(broken, [])
 
 
+def test_paged_evidence_cannot_use_null_page_to_search_joined_text() -> None:
+    data = valid_ir_data()
+    data["conditions"][0]["evidence"][0]["page"] = None
+    source = EvidenceSource(
+        source_file_id="source-1",
+        source_version="v1",
+        text="지원 대상은 서울 소재 중소기업입니다.",
+        pages={1: "지원 대상은 서울 소재 중소기업입니다."},
+    )
+    with pytest.raises(EvidenceValidationError, match="requires a page"):
+        validate_evidence(CanonicalIR.model_validate(data), [source])
+
+    source_without_map = EvidenceSource(
+        source_file_id="source-1",
+        source_version="v1",
+        text="지원 대상은 서울 소재 중소기업입니다.",
+        pages={},
+        page_capable=True,
+    )
+    with pytest.raises(EvidenceValidationError, match="requires a page"):
+        validate_evidence(CanonicalIR.model_validate(data), [source_without_map])
+
+
 def test_ir_rejects_unknown_subject_extra_fields_and_missing_evidence() -> None:
     unknown = valid_ir_data()
     unknown["conditions"][0]["subject"] = "HALLUCINATED_FIELD"
@@ -200,6 +223,116 @@ def test_canonical_ir_rejects_incompatible_operator_expected_type_or_unit(
     )
     with pytest.raises(ValidationError):
         CanonicalIR.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    "expected_value",
+    [
+        {"type": "STRING", "value": ""},
+        {"type": "STRING_SET", "value": []},
+        {"type": "REGION_SET", "value": []},
+    ],
+)
+def test_canonical_ir_rejects_empty_expected_values(expected_value: dict) -> None:
+    data = valid_ir_data()
+    data["conditions"][0]["subject"] = {
+        "STRING": "PRIMARY_INDUSTRY",
+        "STRING_SET": "SECONDARY_INDUSTRY",
+        "REGION_SET": "ELIGIBLE_REGION",
+    }[expected_value["type"]]
+    data["conditions"][0]["operator"] = {
+        "STRING": "EQ",
+        "STRING_SET": "IN",
+        "REGION_SET": "IN",
+    }[expected_value["type"]]
+    data["conditions"][0]["expected_value"] = expected_value
+    with pytest.raises(ValidationError):
+        CanonicalIR.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("subject", "value"),
+    [
+        ("BUSINESS_ENTITY_TYPE", "CORPORATION"),
+        ("ORGANIZATION_TYPE", "COOPERATIVE"),
+        ("COMPANY_SCALE", "MID_SIZED"),
+        ("DELINQUENCY_STATUS", "NONE"),
+    ],
+)
+def test_canonical_ir_accepts_profile_enum_literals(subject: str, value: str) -> None:
+    data = valid_ir_data()
+    data["conditions"][0].update(
+        subject=subject,
+        operator="EQ",
+        expected_value={"type": "ENUM", "value": value},
+    )
+    CanonicalIR.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("subject", "value"),
+    [
+        ("BUSINESS_ENTITY_TYPE", "LIMITED_COMPANY"),
+        ("ORGANIZATION_TYPE", "FOUNDATION"),
+        ("COMPANY_SCALE", "소기업"),
+        ("COMPANY_SCALE", "UNKNOWN"),
+        ("DELINQUENCY_STATUS", "OVERDUE"),
+    ],
+)
+def test_canonical_ir_rejects_unknown_profile_enum_literals(subject: str, value: str) -> None:
+    data = valid_ir_data()
+    data["conditions"][0].update(
+        subject=subject,
+        operator="EQ",
+        expected_value={"type": "ENUM", "value": value},
+    )
+    with pytest.raises(ValidationError):
+        CanonicalIR.model_validate(data)
+
+
+def test_canonical_ir_rejects_unknown_profile_enum_literal_inside_set() -> None:
+    data = valid_ir_data()
+    data["conditions"][0].update(
+        subject="COMPANY_SCALE",
+        operator="IN",
+        expected_value={"type": "STRING_SET", "value": ["SMALL", "STARTUP"]},
+    )
+    with pytest.raises(ValidationError):
+        CanonicalIR.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("evidence_update", "error"),
+    [
+        ({"source_file_id": "unknown-source"}, "Unknown evidence source"),
+        ({"page": None}, "requires a page"),
+        ({"verbatim_text": "원문에 없는 질문 근거"}, "does not occur verbatim"),
+    ],
+)
+def test_question_evidence_uses_the_same_source_page_and_verbatim_validation(
+    evidence_update: dict[str, object], error: str
+) -> None:
+    data = valid_ir_data()
+    question_evidence = {**data["conditions"][0]["evidence"][0], **evidence_update}
+    data["questions"] = [
+        {
+            "question_id": "q1",
+            "condition_id": "c1",
+            "prompt": "소재지를 확인해 주세요.",
+            "answer_type": "STRING_SET",
+            "options": None,
+            "unit": None,
+            "evidence": [question_evidence],
+        }
+    ]
+    source = EvidenceSource(
+        source_file_id="source-1",
+        source_version="v1",
+        text="지원 대상은 서울 소재 중소기업입니다.",
+        pages={1: "지원 대상은 서울 소재 중소기업입니다."},
+    )
+    with pytest.raises(EvidenceValidationError, match=error):
+        validate_evidence(CanonicalIR.model_validate(data), [source])
 
 
 def test_generated_ir_schema_closes_every_object() -> None:

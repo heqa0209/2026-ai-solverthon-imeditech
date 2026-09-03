@@ -15,6 +15,7 @@ from app.auth import AuthContext, current_auth, require_csrf
 from app.company import _current_profile
 from app.config import Settings, get_settings
 from app.db import get_db
+from app.decision_lock import serialize_decision_state
 from app.domain.eligibility import evaluate_decision
 from app.enums import ConditionStatus, DecisionFreshness, Verdict
 from app.errors import ApiError
@@ -454,6 +455,10 @@ async def set_role(
     announcement, profile_version_id = await _assert_current_version(
         db, auth.user.id, announcement_id, body.announcementVersionId
     )
+    await serialize_decision_state(db, user_id=auth.user.id, announcement_id=announcement_id)
+    announcement, profile_version_id = await _assert_current_version(
+        db, auth.user.id, announcement_id, body.announcementVersionId
+    )
     analysis = await db.scalar(
         select(AnalysisRun)
         .where(
@@ -539,6 +544,10 @@ async def answer_condition(
     auth: Annotated[AuthContext, Depends(require_csrf)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> QueuedResponse:
+    announcement, profile_version_id = await _assert_current_version(
+        db, auth.user.id, announcement_id, body.announcementVersionId
+    )
+    await serialize_decision_state(db, user_id=auth.user.id, announcement_id=announcement_id)
     announcement, profile_version_id = await _assert_current_version(
         db, auth.user.id, announcement_id, body.announcementVersionId
     )

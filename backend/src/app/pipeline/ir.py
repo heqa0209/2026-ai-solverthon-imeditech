@@ -7,6 +7,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas import BusinessEntityType, CompanyScale, DelinquencyStatus, OrganizationType
+
 
 class StrictIRModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -59,7 +61,7 @@ class ConditionOperator(StrEnum):
 
 class StringExpected(StrictIRModel):
     type: Literal["STRING"]
-    value: str
+    value: str = Field(min_length=1)
 
 
 class IntegerExpected(StrictIRModel):
@@ -79,12 +81,12 @@ class EnumExpected(StrictIRModel):
 
 class RegionSetExpected(StrictIRModel):
     type: Literal["REGION_SET"]
-    value: list[str]
+    value: list[str] = Field(min_length=1)
 
 
 class StringSetExpected(StrictIRModel):
     type: Literal["STRING_SET"]
-    value: list[str]
+    value: list[str] = Field(min_length=1)
 
 
 class RangeValue(StrictIRModel):
@@ -139,6 +141,14 @@ _ENUM_SUBJECTS = {
     Subject.ORGANIZATION_TYPE,
     Subject.COMPANY_SCALE,
     Subject.DELINQUENCY_STATUS,
+}
+_ENUM_VALUES_BY_SUBJECT = {
+    Subject.BUSINESS_ENTITY_TYPE: frozenset(item.value for item in BusinessEntityType),
+    Subject.ORGANIZATION_TYPE: frozenset(item.value for item in OrganizationType),
+    Subject.COMPANY_SCALE: frozenset(
+        item.value for item in CompanyScale if item is not CompanyScale.UNKNOWN
+    ),
+    Subject.DELINQUENCY_STATUS: frozenset(item.value for item in DelinquencyStatus),
 }
 _STRING_SUBJECTS = {Subject.PRIMARY_INDUSTRY}
 _STRING_COLLECTION_SUBJECTS = {
@@ -290,6 +300,19 @@ class Condition(StrictIRModel):
                 )
             if required_unit is None and self.unit is not None:
                 raise ValueError(f"{self.subject.value} conditions must not have a unit")
+            enum_values = _ENUM_VALUES_BY_SUBJECT.get(self.subject)
+            if enum_values is not None:
+                expected_values = (
+                    self.expected_value.value
+                    if isinstance(self.expected_value, StringSetExpected)
+                    else [self.expected_value.value]
+                )
+                invalid_values = sorted(set(expected_values) - enum_values)
+                if invalid_values:
+                    raise ValueError(
+                        f"{self.subject.value} has unsupported enum values: "
+                        f"{', '.join(invalid_values)}"
+                    )
         if not self.evidence:
             raise ValueError("Every public condition requires evidence")
         return self
@@ -340,6 +363,7 @@ class EvidenceSource:
     source_version: str
     text: str
     pages: dict[int, str] = field(default_factory=dict)
+    page_capable: bool = False
 
 
 class EvidenceValidationError(ValueError):
@@ -350,17 +374,18 @@ def validate_evidence(ir: CanonicalIR, sources: list[EvidenceSource]) -> None:
     """Require every verbatim quote to occur in its stored source/location."""
 
     source_map = {(source.source_file_id, source.source_version): source for source in sources}
-    for condition in ir.conditions:
-        for evidence in condition.evidence:
+    evidence_owners = [
+        (f"condition {condition.condition_id}", condition.evidence) for condition in ir.conditions
+    ] + [(f"question {question.question_id}", question.evidence) for question in ir.questions]
+    for owner, evidence_items in evidence_owners:
+        for evidence in evidence_items:
             source = source_map.get((evidence.source_file_id, evidence.source_version))
             if source is None:
-                raise EvidenceValidationError(
-                    f"Unknown evidence source for condition {condition.condition_id}"
-                )
+                raise EvidenceValidationError(f"Unknown evidence source for {owner}")
+            if (source.page_capable or source.pages) and evidence.page is None:
+                raise EvidenceValidationError(f"Paged evidence requires a page for {owner}")
             haystack = (
                 source.pages.get(evidence.page, "") if evidence.page is not None else source.text
             )
             if not evidence.verbatim_text.strip() or evidence.verbatim_text not in haystack:
-                raise EvidenceValidationError(
-                    f"Evidence does not occur verbatim for condition {condition.condition_id}"
-                )
+                raise EvidenceValidationError(f"Evidence does not occur verbatim for {owner}")

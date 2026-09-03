@@ -9,9 +9,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.decision_lock import serialize_decision_state
 from app.decision_service import publish_deterministic_decision
 from app.domain.eligibility import Evaluation, evaluate_decision
 from app.enums import ConditionStatus, Verdict
@@ -19,6 +20,8 @@ from app.models import (
     AIStageRun,
     AnalysisRun,
     Announcement,
+    AnnouncementAnswer,
+    AnnouncementRoleSelection,
     AnnouncementVersion,
     CompanyProfile,
     CompanyProfileVersion,
@@ -36,6 +39,7 @@ from app.pipeline.extraction import ExtractionFailure, decide_ocr, extract_nativ
 from app.pipeline.input_budget import InputDocument, build_bounded_input
 from app.pipeline.ir import CanonicalIR, EvidenceSource, validate_evidence
 from app.pipeline.jobs import Publisher
+from app.pipeline.semantic import semantic_answer_fingerprint, semantic_input_fingerprint
 
 CONTRACT_ROOT = Path(__file__).with_name("contracts")
 PROMPT_VERSION = "condition-extraction-v1"
@@ -51,6 +55,8 @@ class SourceInput:
     source_priority: int
     download_status: str
     extracted_text: str | None
+    mime_type: str | None = None
+    extracted_pages: dict[int, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -78,6 +84,8 @@ class StageResult:
     company_profile_version_id: str | None = None
     error_code: str | None = None
     condition_id: str | None = None
+    source_file_id: str | None = None
+    answer_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +103,124 @@ class ProfileAnalysis:
     stages: tuple[StageResult, ...]
     explanation: str | None
     force_confirmation: bool
+
+
+async def _latest_successful_analysis_id(
+    db: AsyncSession, announcement_version_id: str
+) -> str | None:
+    return await db.scalar(
+        select(AnalysisRun.id)
+        .where(
+            AnalysisRun.announcement_version_id == announcement_version_id,
+            AnalysisRun.status == "SUCCEEDED",
+        )
+        .order_by(desc(AnalysisRun.completed_at), desc(AnalysisRun.id))
+        .limit(1)
+    )
+
+
+async def _load_user_semantic_state(
+    db: AsyncSession,
+    *,
+    user_id: str,
+    announcement_id: str,
+    announcement_version_id: str,
+) -> tuple[dict[str, dict[str, Any]], str | None]:
+    answer_rows = (
+        await db.execute(
+            select(AnnouncementAnswer, ExtractedCondition.condition_key)
+            .join(
+                ExtractedCondition,
+                ExtractedCondition.id == AnnouncementAnswer.condition_id,
+            )
+            .where(
+                AnnouncementAnswer.user_id == user_id,
+                AnnouncementAnswer.announcement_version_id == announcement_version_id,
+                ExtractedCondition.operator == "SEMANTIC_MATCH",
+            )
+            .order_by(AnnouncementAnswer.created_at, AnnouncementAnswer.id)
+        )
+    ).all()
+    answers: dict[str, dict[str, Any]] = {}
+    for answer, condition_key in answer_rows:
+        answers[condition_key] = {
+            "value": answer.value,
+            "source": answer.source,
+            "memo": answer.memo,
+        }
+    latest_role = await db.scalar(
+        select(AnnouncementRoleSelection)
+        .where(
+            AnnouncementRoleSelection.user_id == user_id,
+            AnnouncementRoleSelection.announcement_id == announcement_id,
+            AnnouncementRoleSelection.announcement_version_id == announcement_version_id,
+        )
+        .order_by(
+            desc(AnnouncementRoleSelection.created_at),
+            desc(AnnouncementRoleSelection.id),
+        )
+        .limit(1)
+    )
+    return answers, latest_role.role_key if latest_role else None
+
+
+def _answer_fingerprints(answers: dict[str, dict[str, Any]]) -> dict[str, str]:
+    return {
+        condition_key: fingerprint
+        for condition_key, answer in answers.items()
+        if (fingerprint := semantic_answer_fingerprint(answer)) is not None
+    }
+
+
+async def _superseded_publication(_db: AsyncSession, _job: Any) -> None:
+    return None
+
+
+def _parse_ocr_pages(
+    output: dict[str, Any] | None, *, expected_count: int | None = None
+) -> dict[int, str]:
+    raw_pages = (output or {}).get("pages")
+    pages: dict[int, str] = {}
+    if isinstance(raw_pages, list):
+        for item in raw_pages:
+            if not isinstance(item, dict):
+                break
+            page = item.get("page")
+            page_text = item.get("text")
+            if (
+                not isinstance(page, int)
+                or isinstance(page, bool)
+                or page < 1
+                or not isinstance(page_text, str)
+                or page in pages
+            ):
+                break
+            pages[page] = page_text
+    expected_pages = (
+        set(range(1, expected_count + 1))
+        if expected_count is not None
+        else set(range(1, max(pages, default=0) + 1))
+    )
+    if not pages or set(pages) != expected_pages:
+        raise ValueError("OCR output must contain every supplied page exactly once")
+    return pages
+
+
+def _page_tagged_text(analysis: SourceAnalysis) -> str:
+    if not analysis.pages:
+        return analysis.text
+    return "\n".join(
+        f'<page number="{page}">\n{analysis.pages[page]}\n</page>'
+        for page in sorted(analysis.pages)
+    )
+
+
+def _is_page_capable_source(source: SourceInput) -> bool:
+    suffix = Path(source.name).suffix.casefold()
+    mime_type = (source.mime_type or "").split(";", 1)[0].strip().casefold()
+    return suffix in {".pdf", ".png", ".jpg", ".jpeg"} or (
+        mime_type == "application/pdf" or mime_type.startswith("image/")
+    )
 
 
 class ProductionAnnouncementAnalyzer:
@@ -136,6 +262,8 @@ class ProductionAnnouncementAnalyzer:
         company_profile_version_id: str | None = None,
         capture_failure: bool = False,
         condition_id: str | None = None,
+        answer_fingerprint: str | None = None,
+        source_file_id: str | None = None,
     ) -> StageResult:
         local_schema = temp_root / schema_path.name
         await asyncio.to_thread(shutil.copy2, schema_path, local_schema)
@@ -173,6 +301,8 @@ class ProductionAnnouncementAnalyzer:
             company_profile_version_id=company_profile_version_id,
             error_code=error_code,
             condition_id=condition_id,
+            answer_fingerprint=answer_fingerprint,
+            source_file_id=source_file_id,
         )
 
     async def _analyze_source(
@@ -180,11 +310,60 @@ class ProductionAnnouncementAnalyzer:
     ) -> tuple[SourceAnalysis, StageResult | None]:
         if source.download_status != "SUCCEEDED":
             return SourceAnalysis(source, "", {}, "SKIPPED", "SOURCE_DOWNLOAD_INCOMPLETE"), None
-        if source.extracted_text:
-            return SourceAnalysis(source, source.extracted_text, {}, "SUCCEEDED", None), None
         path = self._source_path(source)
+        page_capable = _is_page_capable_source(source)
+        restored_pages = dict(source.extracted_pages or {})
+        if source.extracted_text and restored_pages:
+            if path is None:
+                return (
+                    SourceAnalysis(
+                        source,
+                        "",
+                        {},
+                        "FAILED_FINAL",
+                        "SOURCE_PAGE_PROVENANCE_MISSING",
+                    ),
+                    None,
+                )
+            try:
+                if path.suffix.casefold() == ".pdf":
+                    images, truncated = await asyncio.to_thread(
+                        render_pdf_pages,
+                        path,
+                        temp_root / f"ocr-{source.source_file_id}",
+                    )
+                else:
+                    image = temp_root / f"ocr-{source.source_file_id}{path.suffix.casefold()}"
+                    await asyncio.to_thread(shutil.copy2, path, image)
+                    images, truncated = (image,), False
+            except (ExtractionFailure, OSError) as exc:
+                code = exc.code if isinstance(exc, ExtractionFailure) else "SOURCE_READ_FAILED"
+                return SourceAnalysis(source, "", {}, "FAILED_FINAL", code), None
+            if len(images) != len(restored_pages):
+                return (
+                    SourceAnalysis(source, "", {}, "FAILED_FINAL", "OCR_PAGE_MAP_MISMATCH"),
+                    None,
+                )
+            return (
+                SourceAnalysis(
+                    source,
+                    source.extracted_text,
+                    restored_pages,
+                    "SUCCEEDED",
+                    None,
+                    used_ocr=True,
+                    ocr_images=images,
+                    input_truncated=truncated,
+                ),
+                None,
+            )
+        if source.extracted_text and not page_capable:
+            return SourceAnalysis(source, source.extracted_text, {}, "SUCCEEDED", None), None
         if path is None:
-            return SourceAnalysis(source, "", {}, "FAILED_FINAL", "SOURCE_FILE_MISSING"), None
+            failure_code = (
+                "SOURCE_PAGE_PROVENANCE_MISSING" if page_capable else "SOURCE_FILE_MISSING"
+            )
+            return SourceAnalysis(source, "", {}, "FAILED_FINAL", failure_code), None
         try:
             if path.suffix.casefold() == ".txt":
                 text = await asyncio.to_thread(path.read_text, encoding="utf-8")
@@ -228,30 +407,16 @@ class ProductionAnnouncementAnalyzer:
                 "filename": source.name,
             },
             image_paths=images,
+            source_file_id=source.source_file_id,
         )
-        raw_pages = stage.output.get("pages")
-        pages: dict[int, str] = {}
-        if isinstance(raw_pages, list):
-            for item in raw_pages:
-                if not isinstance(item, dict):
-                    break
-                page = item.get("page")
-                page_text = item.get("text")
-                if (
-                    not isinstance(page, int)
-                    or isinstance(page, bool)
-                    or not isinstance(page_text, str)
-                    or page in pages
-                ):
-                    break
-                pages[page] = page_text
-        expected_pages = set(range(1, len(images) + 1))
-        if set(pages) != expected_pages:
+        try:
+            pages = _parse_ocr_pages(stage.output, expected_count=len(images))
+        except ValueError as exc:
             raise AIExecutionError(
                 "OCR_OUTPUT_INVALID",
                 "OCR output must contain every supplied page exactly once",
                 retryable=False,
-            )
+            ) from exc
         text = "\n".join(pages[page] for page in sorted(pages) if pages[page].strip())
         if not text.strip():
             raise AIExecutionError(
@@ -301,6 +466,32 @@ class ProductionAnnouncementAnalyzer:
                     )
                 ).all()
             )
+            ocr_stage_rows = list(
+                (
+                    await db.scalars(
+                        select(AIStageRun)
+                        .join(AnalysisRun, AnalysisRun.id == AIStageRun.analysis_run_id)
+                        .where(
+                            AnalysisRun.announcement_version_id == version.id,
+                            AIStageRun.stage == AIStage.OCR.value,
+                            AIStageRun.error_code.is_(None),
+                        )
+                        .order_by(desc(AnalysisRun.completed_at))
+                    )
+                ).all()
+            )
+            restored_ocr_pages: dict[str, dict[int, str]] = {}
+            for stage_row in ocr_stage_rows:
+                output = stage_row.structured_output
+                if not isinstance(output, dict):
+                    continue
+                source_file_id = output.get("source_file_id")
+                if not isinstance(source_file_id, str) or source_file_id in restored_ocr_pages:
+                    continue
+                try:
+                    restored_ocr_pages[source_file_id] = _parse_ocr_pages(output)
+                except ValueError:
+                    continue
             sources = tuple(
                 SourceInput(
                     source_file_id=row.id,
@@ -310,6 +501,8 @@ class ProductionAnnouncementAnalyzer:
                     source_priority=row.source_priority,
                     download_status=row.download_status,
                     extracted_text=row.extracted_text,
+                    mime_type=row.mime_type,
+                    extracted_pages=restored_ocr_pages.get(row.id),
                 )
                 for row in source_rows
             )
@@ -322,6 +515,7 @@ class ProductionAnnouncementAnalyzer:
                     & (CompanyProfile.user_id == CompanyProfileVersion.user_id),
                 )
                 .where(CompanyProfile.current_version_id.is_not(None))
+                .order_by(CompanyProfileVersion.user_id, CompanyProfileVersion.id)
             )
             target_profile_version_id = getattr(payload, "company_profile_version_id", None)
             if target_profile_version_id is not None:
@@ -338,6 +532,45 @@ class ProductionAnnouncementAnalyzer:
             profiles = tuple(
                 ProfileInput(row.user_id, row.id, dict(row.snapshot)) for row in profile_rows
             )
+            latest_semantic_answers: dict[tuple[str, str], dict[str, Any]] = {}
+            selected_roles: dict[str, str | None] = {}
+            profile_answers: dict[str, dict[str, dict[str, Any]]] = {}
+            for profile in profiles:
+                answers, selected_role = await _load_user_semantic_state(
+                    db,
+                    user_id=profile.user_id,
+                    announcement_id=announcement.id,
+                    announcement_version_id=version.id,
+                )
+                profile_answers[profile.user_id] = answers
+                selected_roles[profile.user_id] = selected_role
+                latest_semantic_answers.update(
+                    {
+                        (profile.user_id, condition_key): answer
+                        for condition_key, answer in answers.items()
+                    }
+                )
+
+            semantic_input_hash = getattr(payload, "semantic_input_hash", None)
+            semantic_base_analysis_run_id = getattr(payload, "semantic_base_analysis_run_id", None)
+            if semantic_input_hash is not None or semantic_base_analysis_run_id is not None:
+                if (
+                    semantic_input_hash is None
+                    or semantic_base_analysis_run_id is None
+                    or target_profile_version_id is None
+                    or len(profiles) != 1
+                    or await _latest_successful_analysis_id(db, version.id)
+                    != semantic_base_analysis_run_id
+                ):
+                    return _superseded_publication
+                profile = profiles[0]
+                actual_input_hash = semantic_input_fingerprint(
+                    analysis_run_id=semantic_base_analysis_run_id,
+                    answer_fingerprints=_answer_fingerprints(profile_answers[profile.user_id]),
+                    selected_role_key=selected_roles[profile.user_id],
+                )
+                if actual_input_hash != semantic_input_hash:
+                    return _superseded_publication
 
         job_id = getattr(context, "job_id", "manual")
         with tempfile.TemporaryDirectory(prefix=f"solverthon-analysis-{job_id}-") as directory:
@@ -354,7 +587,7 @@ class ProductionAnnouncementAnalyzer:
                     InputDocument(
                         item.source.source_file_id,
                         item.source.source_priority,
-                        item.text,
+                        _page_tagged_text(item),
                     )
                     for item in source_analyses
                     if item.text
@@ -375,6 +608,16 @@ class ProductionAnnouncementAnalyzer:
                     "announcement_id": announcement.id,
                     "announcement_version_id": version.id,
                     "source_text": bounded.text,
+                    "source_page_map": [
+                        {
+                            "source_file_id": item.source.source_file_id,
+                            "source_version": item.source.sha256,
+                            "pages": sorted(item.pages),
+                        }
+                        for item in source_analyses
+                        if item.pages
+                        and item.source.source_file_id in bounded.included_source_file_ids
+                    ],
                     "omitted_source_file_ids": list(bounded.omitted_source_file_ids),
                 },
             )
@@ -385,6 +628,7 @@ class ProductionAnnouncementAnalyzer:
                     source_version=item.source.sha256 or "",
                     text=item.text,
                     pages=item.pages,
+                    page_capable=_is_page_capable_source(item.source),
                 )
                 for item in source_analyses
                 if item.text
@@ -449,12 +693,15 @@ class ProductionAnnouncementAnalyzer:
                 if (ocr_validation.output or {}).get("result") != "ACCEPT":
                     safety_unknown_condition_ids.update(ocr_condition_ids)
             for profile in profiles:
+                selected_role_key = selected_roles[profile.user_id]
                 profile_safety_unknown_ids = set(safety_unknown_condition_ids)
                 semantic_evaluations: dict[str, Evaluation] = {}
                 profile_stages: list[StageResult] = []
                 for condition in canonical_ir.conditions:
                     if condition.operator.value != "SEMANTIC_MATCH":
                         continue
+                    answer = latest_semantic_answers.get((profile.user_id, condition.condition_id))
+                    answer_fingerprint = semantic_answer_fingerprint(answer)
                     semantic_stage = await self._run_stage(
                         stage=AIStage.SEMANTIC_JUDGMENT,
                         temp_root=temp_root,
@@ -465,9 +712,12 @@ class ProductionAnnouncementAnalyzer:
                             "company_profile_version_id": profile.version_id,
                             "profile": profile.snapshot,
                             "condition": condition.model_dump(mode="json"),
+                            "selected_role_key": selected_role_key,
+                            "latest_answer": answer,
                         },
                         company_profile_version_id=profile.version_id,
                         condition_id=condition.condition_id,
+                        answer_fingerprint=answer_fingerprint,
                     )
                     profile_stages.append(semantic_stage)
                     returned_condition_id = (semantic_stage.output or {}).get("condition_id")
@@ -491,7 +741,7 @@ class ProductionAnnouncementAnalyzer:
                 calculated = evaluate_decision(
                     ir_json,
                     profile.snapshot,
-                    None,
+                    selected_role_key,
                     semantic_evaluations=semantic_evaluations,
                     safety_unknown_condition_ids=profile_safety_unknown_ids,
                 )
@@ -500,7 +750,7 @@ class ProductionAnnouncementAnalyzer:
                 counterfactual = evaluate_decision(
                     ir_json,
                     profile.snapshot,
-                    None,
+                    selected_role_key,
                     semantic_evaluations=semantic_evaluations,
                     safety_unknown_condition_ids=(profile_safety_unknown_ids | ai_dependent_ids),
                 )
@@ -521,6 +771,12 @@ class ProductionAnnouncementAnalyzer:
                                     "explanation": value.explanation,
                                 }
                                 for key, value in semantic_evaluations.items()
+                            },
+                            "latest_answers": {
+                                condition_id: latest_semantic_answers.get(
+                                    (profile.user_id, condition_id)
+                                )
+                                for condition_id in semantic_evaluations
                             },
                             "ocr_condition_ids": sorted(ocr_condition_ids),
                             "conditions": [
@@ -561,7 +817,7 @@ class ProductionAnnouncementAnalyzer:
                     calculated = evaluate_decision(
                         ir_json,
                         profile.snapshot,
-                        None,
+                        selected_role_key,
                         semantic_evaluations=semantic_evaluations,
                         safety_unknown_condition_ids=profile_safety_unknown_ids,
                     )
@@ -613,6 +869,53 @@ class ProductionAnnouncementAnalyzer:
                 )
 
         async def publish(db: AsyncSession, _job: Any) -> None:
+            if semantic_input_hash is not None:
+                if (
+                    semantic_base_analysis_run_id is None
+                    or target_profile_version_id is None
+                    or len(profiles) != 1
+                ):
+                    return
+                profile = profiles[0]
+                await serialize_decision_state(
+                    db,
+                    user_id=profile.user_id,
+                    announcement_id=announcement.id,
+                )
+                current_announcement_version_id = await db.scalar(
+                    select(Announcement.current_version_id).where(
+                        Announcement.id == announcement.id
+                    )
+                )
+                current_profile_version_id = await db.scalar(
+                    select(CompanyProfileVersion.id)
+                    .join(
+                        CompanyProfile,
+                        (CompanyProfile.current_version_id == CompanyProfileVersion.id)
+                        & (CompanyProfile.id == CompanyProfileVersion.profile_id)
+                        & (CompanyProfile.user_id == CompanyProfileVersion.user_id),
+                    )
+                    .where(CompanyProfileVersion.id == target_profile_version_id)
+                )
+                current_answers, current_role = await _load_user_semantic_state(
+                    db,
+                    user_id=profile.user_id,
+                    announcement_id=announcement.id,
+                    announcement_version_id=version.id,
+                )
+                current_input_hash = semantic_input_fingerprint(
+                    analysis_run_id=semantic_base_analysis_run_id,
+                    answer_fingerprints=_answer_fingerprints(current_answers),
+                    selected_role_key=current_role,
+                )
+                if (
+                    current_announcement_version_id != version.id
+                    or current_profile_version_id != target_profile_version_id
+                    or await _latest_successful_analysis_id(db, version.id)
+                    != semantic_base_analysis_run_id
+                    or current_input_hash != semantic_input_hash
+                ):
+                    return
             now = datetime.now(UTC)
             analysis = await db.scalar(
                 select(AnalysisRun).where(
@@ -665,9 +968,24 @@ class ProductionAnnouncementAnalyzer:
                         schema_version=stage.schema_version,
                         input_hash=stage.input_hash,
                         structured_output=(
-                            {**stage.output, "condition_id": stage.condition_id}
-                            if stage.output is not None and stage.condition_id is not None
-                            else stage.output
+                            {
+                                **stage.output,
+                                **(
+                                    {
+                                        "condition_id": stage.condition_id,
+                                        "answer_fingerprint": stage.answer_fingerprint,
+                                    }
+                                    if stage.condition_id is not None
+                                    else {}
+                                ),
+                                **(
+                                    {"source_file_id": stage.source_file_id}
+                                    if stage.source_file_id is not None
+                                    else {}
+                                ),
+                            }
+                            if stage.output is not None
+                            else None
                         ),
                         evidence=evidence,
                         duration_ms=stage.duration_ms,
@@ -701,6 +1019,37 @@ class ProductionAnnouncementAnalyzer:
             await db.flush()
             for profile_analysis in profile_analyses:
                 profile = profile_analysis.profile
+                await serialize_decision_state(
+                    db,
+                    user_id=profile.user_id,
+                    announcement_id=announcement.id,
+                )
+                current_announcement_version_id = await db.scalar(
+                    select(Announcement.current_version_id).where(
+                        Announcement.id == announcement.id
+                    )
+                )
+                current_profile_version_id = await db.scalar(
+                    select(CompanyProfile.current_version_id).where(
+                        CompanyProfile.user_id == profile.user_id,
+                        CompanyProfile.current_version_id == profile.version_id,
+                    )
+                )
+                current_analysis_id = await _latest_successful_analysis_id(db, version.id)
+                current_answers, current_role = await _load_user_semantic_state(
+                    db,
+                    user_id=profile.user_id,
+                    announcement_id=announcement.id,
+                    announcement_version_id=version.id,
+                )
+                if (
+                    current_announcement_version_id != version.id
+                    or current_profile_version_id != profile.version_id
+                    or current_analysis_id != analysis.id
+                    or current_answers != profile_answers[profile.user_id]
+                    or current_role != selected_roles[profile.user_id]
+                ):
+                    continue
                 decision = await publish_deterministic_decision(
                     db,
                     user_id=profile.user_id,
@@ -708,7 +1057,7 @@ class ProductionAnnouncementAnalyzer:
                     announcement_version_id=version.id,
                     company_profile_version_id=profile.version_id,
                     analysis_run_id=analysis.id,
-                    selected_role_key=None,
+                    selected_role_key=selected_roles[profile.user_id],
                     explanation=profile_analysis.explanation,
                     semantic_evaluations=profile_analysis.semantic_evaluations,
                     safety_unknown_condition_ids=set(profile_analysis.safety_unknown_condition_ids),

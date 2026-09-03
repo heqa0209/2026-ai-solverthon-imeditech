@@ -72,41 +72,34 @@ def test_missing_or_unconvertible_is_unknown_and_mismatch_is_fail() -> None:
     )
 
 
-def test_explicit_semantic_answer_takes_priority_over_stored_semantic_evaluation() -> None:
+def test_explicit_unknown_company_scale_is_evaluated_as_missing() -> None:
+    scale = condition("COMPANY_SCALE", "EQ", {"type": "ENUM", "value": "SMALL"})
+
+    result = evaluate_condition({"companyScale": "UNKNOWN"}, scale)
+
+    assert result.status == ConditionStatus.UNKNOWN
+    assert result.used_value is None
+
+
+def test_boolean_semantic_answer_is_data_not_a_direct_verdict() -> None:
     semantic = condition(
         "PRIMARY_INDUSTRY",
         "SEMANTIC_MATCH",
         {"type": "STRING", "value": "바이오"},
         key="semantic-fit",
     )
-    ir = {
-        "groups": [{"group_id": "root", "operator": "ALL"}],
-        "conditions": [semantic],
-    }
-
-    confirmed = evaluate_decision(
-        ir,
-        {"primaryIndustry": "의료기기"},
-        condition_values={"semantic-fit": True},
-        semantic_evaluations={
-            "semantic-fit": Evaluation(
-                ConditionStatus.FAIL,
-                explanation="이전 profile 기준 의미판단",
-            )
+    evaluated = evaluate_decision(
+        {
+            "groups": [{"group_id": "root", "operator": "ALL"}],
+            "conditions": [semantic],
         },
-    )
-    rejected = evaluate_decision(
-        ir,
-        {"primaryIndustry": "바이오"},
+        {"primaryIndustry": "의료기기"},
         condition_values={"semantic-fit": False},
         semantic_evaluations={"semantic-fit": Evaluation(ConditionStatus.PASS)},
     )
 
-    assert confirmed.verdict == Verdict.ELIGIBLE
-    assert confirmed.conditions["semantic-fit"].status == ConditionStatus.PASS
-    assert confirmed.conditions["semantic-fit"].used_value == {"value": True}
-    assert rejected.verdict == Verdict.INELIGIBLE
-    assert rejected.conditions["semantic-fit"].status == ConditionStatus.FAIL
+    assert evaluated.verdict == Verdict.ELIGIBLE
+    assert evaluated.conditions["semantic-fit"].status == ConditionStatus.PASS
 
 
 def test_tagged_range_expected_value_is_evaluated_against_inner_bounds() -> None:

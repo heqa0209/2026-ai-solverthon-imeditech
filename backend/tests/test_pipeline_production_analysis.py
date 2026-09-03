@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -328,6 +330,11 @@ def test_ocr_source_is_passed_as_bounded_image_and_stage_matrix_is_persisted(
             image_invocation = next(
                 invocation for invocation in fake.invocations if invocation.stage == AIStage.OCR
             )
+            condition_invocation = next(
+                invocation
+                for invocation in fake.invocations
+                if invocation.stage == AIStage.CONDITION_EXTRACTION
+            )
             validation_invocation = next(
                 invocation
                 for invocation in fake.invocations
@@ -335,6 +342,17 @@ def test_ocr_source_is_passed_as_bounded_image_and_stage_matrix_is_persisted(
             )
             assert "--image" in image_invocation.args
             assert "--image" in validation_invocation.args
+            condition_input = json.loads(condition_invocation.stdin)["input_data"]["content"]
+            assert condition_input["source_page_map"] == [
+                {
+                    "source_file_id": "analysis-image",
+                    "source_version": seeded["image_hash"],
+                    "pages": [1],
+                }
+            ]
+            assert '<page number="1">' in condition_input["source_text"]
+            ocr_stage = next(stage for stage in stages if stage.stage == "OCR")
+            assert ocr_stage.structured_output["source_file_id"] == "analysis-image"
             assert "shell_tool" in {
                 image_invocation.args[index + 1]
                 for index, value in enumerate(image_invocation.args[:-1])
@@ -410,6 +428,145 @@ def test_multi_page_pdf_ocr_preserves_page_evidence_boundaries(
     wrong_page_data["conditions"][0]["evidence"][0]["page"] = 1
     with pytest.raises(EvidenceValidationError):
         validate_evidence(CanonicalIR.model_validate(wrong_page_data), [evidence_source])
+
+
+@pytest.mark.parametrize(
+    ("name", "mime_type"),
+    [
+        ("missing.pdf", None),
+        ("missing.bin", "image/png"),
+    ],
+)
+def test_page_capable_extracted_text_without_original_or_page_map_fails_safely(
+    session_factory, tmp_path: Path, name: str, mime_type: str | None
+) -> None:
+    analyzer = ProductionAnnouncementAnalyzer(
+        sessions=session_factory,
+        executor=FakeAIExecutor({}),
+        source_storage_root=tmp_path / "sources",
+    )
+    source = SourceInput(
+        source_file_id="missing-page-source",
+        name=name,
+        storage_path=None,
+        sha256="a" * 64,
+        source_priority=20,
+        download_status="SUCCEEDED",
+        extracted_text="지원 대상은 소기업입니다.",
+        mime_type=mime_type,
+    )
+
+    async def analyze():
+        return await analyzer._analyze_source(source, tmp_path / "job")
+
+    analyzed, stage = asyncio.run(analyze())
+    assert stage is None
+    assert analyzed.text == ""
+    assert analyzed.pages == {}
+    assert analyzed.extraction_status == "FAILED_FINAL"
+    assert analyzed.failure_code == "SOURCE_PAGE_PROVENANCE_MISSING"
+
+
+def test_targeted_reanalysis_restores_ocr_page_map_from_prior_stage(
+    session_factory, tmp_path: Path
+) -> None:
+    storage = tmp_path / "sources"
+
+    async def scenario() -> None:
+        seeded = await _seed(session_factory, storage, ocr_image=True)
+        ocr_text = "지원 대상은 소기업입니다."
+        async with session_factory.begin() as db:
+            source = await db.get(SourceFile, "analysis-image")
+            source.extracted_text = ocr_text
+            source.extraction_status = "SUCCEEDED"
+            now = datetime.now(UTC)
+            previous = AnalysisRun(
+                announcement_version_id=seeded["version"],
+                status="SUCCEEDED",
+                analysis_version="prior-analysis-v1",
+                canonical_ir={},
+                started_at=now,
+                completed_at=now,
+            )
+            db.add(previous)
+            await db.flush()
+            db.add(
+                AIStageRun(
+                    analysis_run_id=previous.id,
+                    stage="OCR",
+                    model="gpt-5.6-luna",
+                    effort="medium",
+                    prompt_version="ocr-v1.prompt",
+                    schema_version="ocr-v1.schema",
+                    input_hash="a" * 64,
+                    structured_output={
+                        "pages": [{"page": 1, "text": ocr_text}],
+                        "source_file_id": "analysis-image",
+                    },
+                    evidence=[],
+                    duration_ms=1,
+                    attempt=1,
+                )
+            )
+
+        ir = _canonical_ir("analysis-image", seeded["image_hash"], ocr_text)
+        ir["conditions"][0]["evidence"][0]["page"] = 1
+        fake = FakeAIExecutor(
+            {
+                AIStage.CONDITION_EXTRACTION: ir,
+                AIStage.OCR_EVIDENCE_VALIDATION: {
+                    "result": "ACCEPT",
+                    "reason": "기존 OCR 페이지 근거 확인",
+                },
+                AIStage.FINAL_AI_VALIDATION: {
+                    "result": "ACCEPT",
+                    "corrections": [],
+                    "reason": "근거 확인",
+                },
+                AIStage.USER_EXPLANATION: {"explanation": "OCR 근거를 확인했습니다."},
+            }
+        )
+        analyzer = ProductionAnnouncementAnalyzer(
+            sessions=session_factory,
+            executor=fake,
+            source_storage_root=storage,
+        )
+        publisher = await analyzer.prepare(
+            payload=type(
+                "Payload",
+                (),
+                {
+                    "announcement_id": seeded["announcement"],
+                    "announcement_version_id": seeded["version"],
+                    "company_profile_version_id": None,
+                },
+            )(),
+            context=type("Context", (), {"job_id": "targeted-ocr-reanalysis"})(),
+        )
+        assert AIStage.OCR not in {invocation.stage for invocation in fake.invocations}
+        restored_validation = next(
+            invocation
+            for invocation in fake.invocations
+            if invocation.stage == AIStage.OCR_EVIDENCE_VALIDATION
+        )
+        assert "--image" in restored_validation.args
+        condition_invocation = next(
+            invocation
+            for invocation in fake.invocations
+            if invocation.stage == AIStage.CONDITION_EXTRACTION
+        )
+        condition_input = json.loads(condition_invocation.stdin)["input_data"]["content"]
+        assert condition_input["source_page_map"] == [
+            {
+                "source_file_id": "analysis-image",
+                "source_version": seeded["image_hash"],
+                "pages": [1],
+            }
+        ]
+        async with session_factory.begin() as db:
+            await publisher(db, type("Job", (), {})())
+
+    asyncio.run(scenario())
 
 
 def test_incomplete_attachment_forces_safe_needs_confirmation(

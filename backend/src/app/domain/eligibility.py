@@ -121,8 +121,11 @@ def _profile_value(profile: dict[str, Any], subject: str) -> tuple[Any, str | No
     if subject == "ELIGIBLE_REGION" and value:
         value = [item.get("code") for item in value if isinstance(item, dict)]
         assumption = "ELIGIBLE_REGION_LOCATION_TYPE_SUBSTITUTION"
-    elif subject == "COMPANY_SCALE" and value:
-        assumption = "COMPANY_SCALE_USER_ASSERTED"
+    elif subject == "COMPANY_SCALE":
+        if value == "UNKNOWN":
+            value = None
+        elif value:
+            assumption = "COMPANY_SCALE_USER_ASSERTED"
     elif subject == "CERTIFICATION" and value:
         assumption = "CERTIFICATION_VALIDITY_ASSUMED"
     return value, assumption
@@ -290,24 +293,6 @@ def evaluate_decision(
                 ConditionStatus.UNKNOWN,
                 explanation="AI 의존 근거를 안전하게 확정할 수 없습니다.",
             )
-        elif (
-            str(condition.get("operator", "")) == "SEMANTIC_MATCH"
-            and condition_values
-            and condition_id in condition_values
-        ):
-            explicit_answer = condition_values[condition_id]
-            if type(explicit_answer) is bool:
-                evaluations[condition_id] = Evaluation(
-                    ConditionStatus.PASS if explicit_answer else ConditionStatus.FAIL,
-                    used_value={"value": explicit_answer},
-                    explanation="사용자가 확인한 답변을 반영했습니다.",
-                )
-            else:
-                evaluations[condition_id] = Evaluation(
-                    ConditionStatus.UNKNOWN,
-                    used_value={"value": explicit_answer},
-                    explanation="사용자 답변을 의미판단에 다시 반영해야 합니다.",
-                )
         elif (
             str(condition.get("operator", "")) == "SEMANTIC_MATCH"
             and semantic_evaluations

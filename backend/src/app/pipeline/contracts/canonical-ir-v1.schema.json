@@ -41,7 +41,7 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "properties": {"type": {"const": "STRING"}, "value": {"type": "string"}},
+          "properties": {"type": {"const": "STRING"}, "value": {"type": "string", "minLength": 1}},
           "required": ["type", "value"]
         },
         {
@@ -65,13 +65,13 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "properties": {"type": {"const": "REGION_SET"}, "value": {"type": "array", "items": {"type": "string"}}},
+          "properties": {"type": {"const": "REGION_SET"}, "value": {"type": "array", "minItems": 1, "items": {"type": "string"}}},
           "required": ["type", "value"]
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "properties": {"type": {"const": "STRING_SET"}, "value": {"type": "array", "items": {"type": "string"}}},
+          "properties": {"type": {"const": "STRING_SET"}, "value": {"type": "array", "minItems": 1, "items": {"type": "string"}}},
           "required": ["type", "value"]
         },
         {

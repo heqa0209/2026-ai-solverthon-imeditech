@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import desc, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.decision_lock import serialize_decision_state
 from app.domain.eligibility import Evaluation, evaluate_condition, evaluate_decision
 from app.enums import ConditionStatus, Verdict
 from app.models import (
@@ -23,22 +23,6 @@ from app.models import (
 )
 
 ANALYSIS_FAILURE_EXPLANATION = "공고 분석을 완료하지 못해 원문 확인이 필요합니다."
-
-
-def _decision_lock_key(user_id: str, announcement_id: str) -> int:
-    digest = hashlib.blake2b(f"{user_id}\0{announcement_id}".encode(), digest_size=8).digest()
-    return int.from_bytes(digest, byteorder="big", signed=True)
-
-
-async def _serialize_publication(db: AsyncSession, *, user_id: str, announcement_id: str) -> None:
-    if db.get_bind().dialect.name == "postgresql":
-        await db.execute(
-            select(func.pg_advisory_xact_lock(_decision_lock_key(user_id, announcement_id)))
-        )
-        return
-    await db.execute(
-        select(Announcement.id).where(Announcement.id == announcement_id).with_for_update()
-    )
 
 
 async def publish_deterministic_decision(
@@ -59,6 +43,7 @@ async def publish_deterministic_decision(
     The caller owns the surrounding transaction. No AI output can override the
     returned deterministic comparisons.
     """
+    await serialize_decision_state(db, user_id=user_id, announcement_id=announcement_id)
     profile_version = await db.get(CompanyProfileVersion, company_profile_version_id)
     analysis = await db.get(AnalysisRun, analysis_run_id)
     if profile_version is None or analysis is None or not analysis.canonical_ir:
@@ -76,24 +61,30 @@ async def publish_deterministic_decision(
             )
         ).all()
     )
-    answers = list(
-        (
-            await db.scalars(
-                select(AnnouncementAnswer).where(
-                    AnnouncementAnswer.user_id == user_id,
-                    AnnouncementAnswer.announcement_version_id == announcement_version_id,
-                )
+    answers = (
+        await db.execute(
+            select(AnnouncementAnswer, ExtractedCondition.condition_key)
+            .join(
+                ExtractedCondition,
+                ExtractedCondition.id == AnnouncementAnswer.condition_id,
             )
-        ).all()
-    )
+            .where(
+                AnnouncementAnswer.user_id == user_id,
+                AnnouncementAnswer.announcement_version_id == announcement_version_id,
+            )
+        )
+    ).all()
     latest_answers: dict[str, AnnouncementAnswer] = {}
-    for answer in sorted(answers, key=lambda item: item.created_at):
-        latest_answers[answer.condition_id] = answer
+    for answer, condition_key in sorted(
+        answers,
+        key=lambda item: (item[0].created_at, item[0].id),
+    ):
+        latest_answers[condition_key] = answer
 
     condition_values = {
-        condition.condition_key: latest_answers[condition.id].value
+        condition.condition_key: latest_answers[condition.condition_key].value
         for condition in extracted
-        if condition.id in latest_answers
+        if condition.condition_key in latest_answers
     }
     evaluated = evaluate_decision(
         analysis.canonical_ir,
@@ -104,7 +95,6 @@ async def publish_deterministic_decision(
         safety_unknown_condition_ids=safety_unknown_condition_ids,
     )
 
-    await _serialize_publication(db, user_id=user_id, announcement_id=announcement_id)
     await db.execute(
         update(EligibilityDecision)
         .where(
@@ -208,6 +198,25 @@ async def publish_analysis_failure(
         profile_version_id = profile.current_version_id
         if profile_version_id is None:
             continue
+        await serialize_decision_state(
+            db,
+            user_id=profile.user_id,
+            announcement_id=announcement.id,
+        )
+        current_announcement_version_id = await db.scalar(
+            select(Announcement.current_version_id).where(Announcement.id == announcement.id)
+        )
+        current_profile_version_id = await db.scalar(
+            select(CompanyProfile.current_version_id).where(
+                CompanyProfile.id == profile.id,
+                CompanyProfile.user_id == profile.user_id,
+            )
+        )
+        if (
+            current_announcement_version_id != version.id
+            or current_profile_version_id != profile_version_id
+        ):
+            continue
         latest_role = await db.scalar(
             select(AnnouncementRoleSelection)
             .where(
@@ -215,13 +224,11 @@ async def publish_analysis_failure(
                 AnnouncementRoleSelection.announcement_id == announcement.id,
                 AnnouncementRoleSelection.announcement_version_id == version.id,
             )
-            .order_by(AnnouncementRoleSelection.created_at.desc())
+            .order_by(
+                desc(AnnouncementRoleSelection.created_at),
+                desc(AnnouncementRoleSelection.id),
+            )
             .limit(1)
-        )
-        await _serialize_publication(
-            db,
-            user_id=profile.user_id,
-            announcement_id=announcement.id,
         )
         await db.execute(
             update(EligibilityDecision)

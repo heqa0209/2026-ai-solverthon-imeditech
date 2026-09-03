@@ -11,6 +11,7 @@ from app.models import (
     AIStageRun,
     AnalysisRun,
     Announcement,
+    AnnouncementAnswer,
     AnnouncementVersion,
     CompanyProfile,
     CompanyProfileVersion,
@@ -252,6 +253,68 @@ def test_company_change_without_matching_semantic_result_queues_reanalysis_witho
             assert current.company_profile_version_id == seeded["profile_version"]
             assert current.published_verdict == "ELIGIBLE"
             assert analyze.payload["companyProfileVersionId"] == next_profile_id
+
+    asyncio.run(scenario())
+
+
+def test_new_semantic_answer_invalidates_cached_stage_and_queues_targeted_reanalysis(
+    session_factory, tmp_path: Path
+) -> None:
+    async def scenario() -> None:
+        seeded = await _seed_semantic_analysis(session_factory)
+        async with session_factory.begin() as db:
+            condition = await db.scalar(
+                select(ExtractedCondition).where(ExtractedCondition.condition_key == "semantic-fit")
+            )
+            db.add(
+                EligibilityDecision(
+                    user_id=seeded["user"],
+                    announcement_id=seeded["announcement"],
+                    announcement_version_id=seeded["version"],
+                    company_profile_version_id=seeded["profile_version"],
+                    calculated_verdict="ELIGIBLE",
+                    published_verdict="ELIGIBLE",
+                    decision_origin="CALCULATED",
+                    is_current=True,
+                )
+            )
+            db.add(
+                AnnouncementAnswer(
+                    user_id=seeded["user"],
+                    announcement_version_id=seeded["version"],
+                    condition_id=condition.id,
+                    value="정밀 로봇 의료기기",
+                    source="USER_VERIFIED",
+                    memo="담당자 확인",
+                )
+            )
+            job = await enqueue_job(
+                db,
+                "DECISION_REEVALUATE",
+                {
+                    "userId": seeded["user"],
+                    "announcementId": seeded["announcement"],
+                    "announcementVersionId": seeded["version"],
+                    "companyProfileVersionId": seeded["profile_version"],
+                    "cause": "ANSWER_SAVED",
+                },
+            )
+
+        assert await _worker(session_factory, tmp_path, worker_id="semantic-answer").run_once() == 1
+        async with session_factory() as db:
+            completed = await db.get(Job, job.id)
+            current = await db.scalar(
+                select(EligibilityDecision).where(EligibilityDecision.is_current.is_(True))
+            )
+            analyze = await db.scalar(
+                select(Job).where(
+                    Job.job_type == "ANNOUNCEMENT_ANALYZE",
+                    Job.status == "QUEUED",
+                )
+            )
+            assert completed.status == "SUCCEEDED"
+            assert current.published_verdict == "ELIGIBLE"
+            assert analyze.payload["companyProfileVersionId"] == seeded["profile_version"]
 
     asyncio.run(scenario())
 

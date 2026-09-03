@@ -48,11 +48,13 @@ def register_pipeline_commands(root: typer.Typer, service: PipelineCLIService) -
 
     collect = typer.Typer(help="Collect official Bizinfo announcements")
     announcement = typer.Typer(help="Analyze one announcement")
+    decision = typer.Typer(help="Reevaluate deterministic decisions")
     job = typer.Typer(help="Inspect and retry background jobs")
     fixture = typer.Typer(help="Load immutable demo fixtures")
     acceptance = typer.Typer(help="Run acceptance datasets")
     root.add_typer(collect, name="collect")
     root.add_typer(announcement, name="announcement")
+    root.add_typer(decision, name="decision")
     root.add_typer(job, name="job")
     root.add_typer(fixture, name="fixture")
     root.add_typer(acceptance, name="acceptance")
@@ -94,6 +96,13 @@ def register_pipeline_commands(root: typer.Typer, service: PipelineCLIService) -
     @job.command("status")
     def job_status(job_id: str = typer.Option(..., "--job-id")) -> None:
         typer.echo(asyncio.run(service.job_status(job_id)))
+
+    @decision.command("reevaluate")
+    def decision_reevaluate(
+        announcement_id: str = typer.Option(..., "--announcement-id"),
+        yes: bool = typer.Option(False, "--yes"),
+    ) -> None:
+        execute_scoped("decision.reevaluate", announcement_id, yes)
 
     @job.command("retry")
     def job_retry(

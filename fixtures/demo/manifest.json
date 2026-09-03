@@ -1,0 +1,17 @@
+{
+  "announcement_id": "DEMO-2026-001",
+  "wrapper_path": "bizinfo-page.json",
+  "wrapper_sha256": "3b3b4506c6e5f4821f0fde15bc0b22d8737ef54f377b304efc0b54087771c5d8",
+  "announcement_version_hash": "883e5eaead32c2351c08b5796cb2cf93b6b1248515bf87926321b9891b16fc0d",
+  "body_source": {
+    "path": "body.txt",
+    "sha256": "3f29f2c56d063859a75b63829e526d457c4b1cc1bb370bbec3c191dca5218d40",
+    "source_file_id": "demo-2026-001-body",
+    "expected_extraction": "NATIVE"
+  },
+  "attachments": [],
+  "expected_canonical_ir_path": "canonical-ir.json",
+  "expected_ai_stages": [
+    "CONDITION_EXTRACTION"
+  ]
+}

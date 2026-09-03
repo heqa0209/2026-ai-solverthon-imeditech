@@ -1,0 +1,17 @@
+{
+  "jsonArray": [
+    {
+      "pblancId": "DEMO-2026-001",
+      "pblancNm": "2026 소기업 디지털 전환 지원사업",
+      "pblancUrl": "https://www.bizinfo.go.kr/demo/DEMO-2026-001",
+      "jrsdInsttNm": "중소벤처기업부",
+      "bsnsSumryCn": "소기업의 디지털 전환을 지원하는 합성 시연 공고입니다.",
+      "pblancCn": "지원 대상은 소기업입니다. 신청 마감일은 2099년 12월 31일입니다.",
+      "creatPnttm": "20260903",
+      "reqstBeginDe": "20260903",
+      "reqstEndDe": "20991231",
+      "attachments": []
+    }
+  ],
+  "totalCount": "1"
+}

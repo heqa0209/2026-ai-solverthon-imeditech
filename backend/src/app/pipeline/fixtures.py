@@ -26,6 +26,7 @@ class DemoFixtureManifest(StrictFixtureModel):
     wrapper_path: str
     wrapper_sha256: str
     announcement_version_hash: str
+    body_source: FixtureFile
     attachments: list[FixtureFile]
     expected_canonical_ir_path: str
     expected_ai_stages: list[str]
@@ -50,6 +51,9 @@ def load_fixture_manifest(path: Path) -> DemoFixtureManifest:
     if sha256_bytes(wrapper.read_bytes()) != manifest.wrapper_sha256:
         raise FixtureIntegrityError("Fixture wrapper hash mismatch")
     _resolve_inside(root, manifest.expected_canonical_ir_path).read_bytes()
+    body_source = _resolve_inside(root, manifest.body_source.path)
+    if sha256_bytes(body_source.read_bytes()) != manifest.body_source.sha256:
+        raise FixtureIntegrityError("Fixture body source hash mismatch")
     attachment_hashes: list[str] = []
     for attachment in manifest.attachments:
         candidate = _resolve_inside(root, attachment.path)
@@ -57,7 +61,7 @@ def load_fixture_manifest(path: Path) -> DemoFixtureManifest:
             raise FixtureIntegrityError(f"Fixture attachment hash mismatch: {attachment.path}")
         attachment_hashes.append(attachment.sha256)
     wrapper_value = load_wrapper(path, manifest)
-    page = parse_bizinfo_page(wrapper_value, page_index=1, page_unit=max(len(wrapper_value), 1))
+    page = parse_bizinfo_page(wrapper_value, page_index=1, page_unit=100)
     announcement = next(
         (item for item in page.items if item.source_id == manifest.announcement_id), None
     )

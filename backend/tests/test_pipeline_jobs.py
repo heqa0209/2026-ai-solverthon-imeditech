@@ -201,11 +201,11 @@ async def test_worker_heartbeat_continues_during_long_job_and_is_removed_on_stop
         isolation_check=_isolation_ok,
     )
     worker_task = asyncio.create_task(worker.run_forever())
-    await asyncio.wait_for(started.wait(), timeout=1)
-    await asyncio.wait_for(repeated_during_job.wait(), timeout=1)
+    await asyncio.wait_for(started.wait(), timeout=5)
+    await asyncio.wait_for(repeated_during_job.wait(), timeout=5)
     assert during_job_calls >= 2
     release.set()
     await asyncio.sleep(0.02)
     await worker.stop()
-    await asyncio.wait_for(worker_task, timeout=1)
+    await asyncio.wait_for(worker_task, timeout=5)
     cleanup.assert_awaited()

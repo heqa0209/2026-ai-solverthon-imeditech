@@ -581,16 +581,29 @@ class ProductionAnnouncementAnalyzer:
 
         async def publish(db: AsyncSession, _job: Any) -> None:
             now = datetime.now(UTC)
-            analysis = AnalysisRun(
-                announcement_version_id=version.id,
-                status="SUCCEEDED",
-                analysis_version=canonical_ir.analysis_version,
-                canonical_ir=canonical_ir.model_dump(mode="json"),
-                started_at=now,
-                completed_at=now,
-                error_code="ATTACHMENT_INPUT_TRUNCATED" if bounded.truncated else None,
+            analysis = await db.scalar(
+                select(AnalysisRun).where(
+                    AnalysisRun.announcement_version_id == version.id,
+                    AnalysisRun.status == "PENDING",
+                    AnalysisRun.analysis_version == "attachment-selection-v1",
+                )
             )
-            db.add(analysis)
+            if analysis is None:
+                analysis = AnalysisRun(
+                    announcement_version_id=version.id,
+                    status="SUCCEEDED",
+                    analysis_version=canonical_ir.analysis_version,
+                    canonical_ir=canonical_ir.model_dump(mode="json"),
+                    started_at=now,
+                    completed_at=now,
+                )
+                db.add(analysis)
+            else:
+                analysis.status = "SUCCEEDED"
+                analysis.analysis_version = canonical_ir.analysis_version
+                analysis.canonical_ir = canonical_ir.model_dump(mode="json")
+                analysis.completed_at = now
+            analysis.error_code = "ATTACHMENT_INPUT_TRUNCATED" if bounded.truncated else None
             await db.flush()
             for item in source_analyses:
                 row = await db.get(SourceFile, item.source.source_file_id)

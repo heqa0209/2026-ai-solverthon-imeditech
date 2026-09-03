@@ -10,7 +10,33 @@
       "creatPnttm": "20260903",
       "reqstBeginDe": "20260903",
       "reqstEndDe": "20991231",
-      "attachments": []
+      "attachments": [
+        {
+          "name": "native.hwpx",
+          "url": "https://www.bizinfo.go.kr/demo/files/native.hwpx"
+        },
+        {
+          "name": "native.pdf",
+          "url": "https://www.bizinfo.go.kr/demo/files/native.pdf"
+        },
+        {
+          "name": "mixed.pdf",
+          "url": "https://www.bizinfo.go.kr/demo/files/mixed.pdf"
+        },
+        {
+          "name": "vision.png",
+          "url": "https://www.bizinfo.go.kr/demo/files/vision.png"
+        },
+        {
+          "name": "vision.pdf",
+          "url": "https://www.bizinfo.go.kr/demo/files/vision.pdf"
+        },
+        {
+          "name": "limit-exceeded.bin",
+          "url": "https://www.bizinfo.go.kr/demo/files/limit-exceeded.bin",
+          "sizeBytes": 20971521
+        }
+      ]
     }
   ],
   "totalCount": "1"

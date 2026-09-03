@@ -19,6 +19,7 @@ class FixtureFile(StrictFixtureModel):
     sha256: str
     source_file_id: str
     expected_extraction: Literal["NATIVE", "OCR", "LIMIT_EXCEEDED"]
+    declared_size_bytes: int | None = None
 
 
 class FixtureCoverageMatrix(StrictFixtureModel):
@@ -68,6 +69,13 @@ def load_fixture_manifest(path: Path) -> DemoFixtureManifest:
         candidate = _resolve_inside(root, attachment.path)
         if sha256_bytes(candidate.read_bytes()) != attachment.sha256:
             raise FixtureIntegrityError(f"Fixture attachment hash mismatch: {attachment.path}")
+        if (
+            attachment.expected_extraction == "LIMIT_EXCEEDED"
+            and (attachment.declared_size_bytes or 0) <= 20 * 1024 * 1024
+        ):
+            raise FixtureIntegrityError(
+                "Limit-exceeded fixture must declare a size above the 20MB file limit"
+            )
         attachment_hashes.append(attachment.sha256)
     wrapper_value = load_wrapper(path, manifest)
     page = parse_bizinfo_page(wrapper_value, page_index=1, page_unit=100)

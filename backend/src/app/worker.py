@@ -53,6 +53,10 @@ def _build_runtime(
         client=BizinfoClient(api_key, http),
         http=http,
         source_storage_root=settings.source_storage_root,
+        executor=CodexExecutor(
+            supervisor,
+            timeout_seconds=settings.ai_stage_timeout_seconds,
+        ),
     )
     analyzer = ProductionAnnouncementAnalyzer(
         sessions=SessionFactory,

@@ -1,25 +1,64 @@
 {
   "announcement_id": "DEMO-2026-001",
   "wrapper_path": "bizinfo-page.json",
-  "wrapper_sha256": "3b3b4506c6e5f4821f0fde15bc0b22d8737ef54f377b304efc0b54087771c5d8",
-  "announcement_version_hash": "883e5eaead32c2351c08b5796cb2cf93b6b1248515bf87926321b9891b16fc0d",
+  "wrapper_sha256": "46df14250a27d41d1817c67488dd2a7512eb5f2181662f4e90b8519c32a0358c",
+  "announcement_version_hash": "28bd8a41fbfcca2b47491a776b0b6312ee091eda6a921e59c12fd2963ffd257d",
   "body_source": {
     "path": "body.txt",
     "sha256": "3f29f2c56d063859a75b63829e526d457c4b1cc1bb370bbec3c191dca5218d40",
-    "source_file_id": "demo-2026-001-body",
+    "source_file_id": "demo-2026-001-v2-body",
     "expected_extraction": "NATIVE"
   },
-  "attachments": [],
+  "attachments": [
+    {
+      "path": "native.hwpx",
+      "sha256": "78dfc87e3e3d052efd42e95cdc7913bc3fb6bb7d01bb0f97b172331c90730b57",
+      "source_file_id": "demo-2026-001-native-hwpx",
+      "expected_extraction": "NATIVE"
+    },
+    {
+      "path": "native.pdf",
+      "sha256": "47277cdb7f4979343d3af3db05de69dad84b8abbe5d2ced6e55931f8ca172b1d",
+      "source_file_id": "demo-2026-001-native-pdf",
+      "expected_extraction": "NATIVE"
+    },
+    {
+      "path": "mixed.pdf",
+      "sha256": "0e74d9d53f213c6a44daf62511a9279b1cfeb99051e0a886020908397dd9f77d",
+      "source_file_id": "demo-2026-001-mixed-pdf",
+      "expected_extraction": "NATIVE"
+    },
+    {
+      "path": "vision.png",
+      "sha256": "85b4b09a00da95d6e17df9d0588fec71f2ac7887b16a80a3b4fead904271bf30",
+      "source_file_id": "demo-2026-001-vision-image",
+      "expected_extraction": "OCR"
+    },
+    {
+      "path": "vision.pdf",
+      "sha256": "0c4ad4c552e91d1a9d92c6e10bdb105815b5f59554612747751d32816dedace2",
+      "source_file_id": "demo-2026-001-vision-pdf",
+      "expected_extraction": "OCR"
+    },
+    {
+      "path": "limit-exceeded.metadata.json",
+      "sha256": "a3d9a819272f50c7bc16f1e238c88493639dde94873b8d8db873daad05a8b029",
+      "source_file_id": "demo-2026-001-limit-exceeded",
+      "expected_extraction": "LIMIT_EXCEEDED",
+      "declared_size_bytes": 20971521
+    }
+  ],
   "expected_canonical_ir_path": "canonical-ir.json",
   "expected_ai_stages": [
+    "OCR",
     "CONDITION_EXTRACTION",
     "USER_EXPLANATION"
   ],
   "coverage_matrix": {
-    "native_hwpx": "tests/test_pipeline_extraction.py::test_zip_xml_native_extractors_preserve_filename_location[.hwpx-Contents/section0.xml-<section><text>지역 조건</text></section>-지역 조건]",
-    "native_pdf": "tests/test_pipeline_extraction.py::test_empty_ocr_capable_format_requests_ocr[.pdf]",
-    "mixed_pdf": "tests/test_pipeline_extraction.py::test_partial_pdf_native_text_suppresses_ocr_by_approved_policy",
-    "vision_ocr": "tests/test_pipeline_production_analysis.py::test_ocr_source_is_passed_as_bounded_image_and_stage_matrix_is_persisted",
-    "limit_exceeded": "tests/test_pipeline_attachments.py::test_attachment_size_limits"
+    "native_hwpx": "native.hwpx",
+    "native_pdf": "native.pdf",
+    "mixed_pdf": "mixed.pdf",
+    "vision_ocr": "vision.png|vision.pdf",
+    "limit_exceeded": "limit-exceeded.metadata.json"
   }
 }

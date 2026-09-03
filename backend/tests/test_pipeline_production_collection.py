@@ -9,10 +9,21 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import httpx
+import pytest
 from sqlalchemy import func, select
 
 from app.jobs import enqueue_job
-from app.models import Announcement, AnnouncementVersion, CollectionSnapshot, Job, SourceFile
+from app.models import (
+    AIStageRun,
+    AnalysisRun,
+    Announcement,
+    AnnouncementVersion,
+    CollectionSnapshot,
+    Job,
+    SourceFile,
+)
+from app.pipeline.ai import AIExecutionError, AIStage, FakeAIExecutor
+from app.pipeline.attachments import MAX_FILE_BYTES
 from app.pipeline.bizinfo import BIZINFO_ENDPOINT, BizinfoClient
 from app.pipeline.collector import ProductionBizinfoCollector
 from app.pipeline.handlers import build_handler_registry
@@ -239,3 +250,123 @@ def test_streaming_download_retries_transient_failure(session_factory, tmp_path:
 
     asyncio.run(scenario())
     assert attempts == 3
+
+
+def _selection_wrapper() -> dict:
+    attachments = [
+        {
+            "name": f"attachment-{index}.pdf",
+            "url": f"https://files.test/attachment-{index}.pdf",
+            "sizeBytes": MAX_FILE_BYTES + 1 if index == 0 else 16 * 1024 * 1024,
+        }
+        for index in range(6)
+    ]
+    item = _wrapper(source_ids=("SELECT-1",))["jsonArray"][0]
+    item["attachments"] = attachments
+    return {"jsonArray": [item], "totalCount": "1"}
+
+
+def test_collection_uses_luna_selection_before_possible_100mb_limit_and_records_reasons(
+    session_factory, tmp_path: Path
+) -> None:
+    wrapper = _selection_wrapper()
+    ranking = [
+        {
+            "source_order": index,
+            "prioritized": index in {4, 5},
+            "reason": f"자격조건 관련 우선순위 {index}",
+        }
+        for index in reversed(range(6))
+    ]
+    fake = FakeAIExecutor({AIStage.ATTACHMENT_SELECTION: {"ranked_attachments": ranking}})
+    downloaded: list[str] = []
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        if str(request.url).startswith(BIZINFO_ENDPOINT):
+            return httpx.Response(200, json=wrapper)
+        downloaded.append(str(request.url))
+        return httpx.Response(
+            200,
+            content=b"%PDF-1.4\nfixture\n",
+            headers={"content-type": "application/pdf"},
+        )
+
+    async def scenario() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as http:
+            collector = ProductionBizinfoCollector(
+                sessions=session_factory,
+                client=BizinfoClient("fixture-key", http),
+                http=http,
+                source_storage_root=tmp_path / "sources",
+                executor=fake,
+            )
+            await _publish(collector, session_factory, "DAILY")
+
+        async with session_factory() as db:
+            stage = await db.scalar(
+                select(AIStageRun).where(AIStageRun.stage == "ATTACHMENT_SELECTION")
+            )
+            analysis = await db.get(AnalysisRun, stage.analysis_run_id)
+            output = stage.structured_output
+            assert analysis.status == "PENDING"
+            assert (stage.model, stage.effort) == ("gpt-5.6-luna", "low")
+            assert [item["source_order"] for item in output["ranked_attachments"]] == [
+                5,
+                4,
+                0,
+                1,
+                2,
+                3,
+            ]
+            outcomes = {item["source_order"]: item for item in output["selection_outcomes"]}
+            assert outcomes[0] == {
+                "source_order": 0,
+                "selected": False,
+                "reason": "자격조건 관련 우선순위 0",
+                "failure_code": "FILE_LIMIT_EXCEEDED",
+            }
+            assert all(outcomes[index]["selected"] for index in range(1, 6))
+
+    asyncio.run(scenario())
+    assert [url.rsplit("-", 1)[-1] for url in downloaded] == [
+        "5.pdf",
+        "4.pdf",
+        "1.pdf",
+        "2.pdf",
+        "3.pdf",
+    ]
+    assert [invocation.stage for invocation in fake.invocations] == [AIStage.ATTACHMENT_SELECTION]
+
+
+def test_collection_fails_safely_when_attachment_selection_model_is_unavailable(
+    session_factory, tmp_path: Path
+) -> None:
+    wrapper = _selection_wrapper()
+    fake = FakeAIExecutor({})
+    attachment_requests = 0
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        nonlocal attachment_requests
+        if str(request.url).startswith(BIZINFO_ENDPOINT):
+            return httpx.Response(200, json=wrapper)
+        attachment_requests += 1
+        return httpx.Response(200, content=b"never downloaded")
+
+    async def scenario() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as http:
+            collector = ProductionBizinfoCollector(
+                sessions=session_factory,
+                client=BizinfoClient("fixture-key", http),
+                http=http,
+                source_storage_root=tmp_path / "sources",
+                executor=fake,
+            )
+            with pytest.raises(AIExecutionError) as caught:
+                await _publish(collector, session_factory, "DAILY")
+            assert caught.value.code == "FIXTURE_OUTPUT_MISSING"
+        async with session_factory() as db:
+            assert await db.scalar(select(func.count(Announcement.id))) == 0
+
+    asyncio.run(scenario())
+    assert attachment_requests == 0
+    assert len(fake.invocations) == 1

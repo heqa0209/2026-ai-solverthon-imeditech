@@ -21,6 +21,7 @@ from app.models import (
     SourceFile,
     User,
 )
+from app.pipeline.extraction import decide_ocr, extract_native
 from app.pipeline.fixtures import load_fixture_manifest
 from app.pipeline.handlers import build_handler_registry
 from app.pipeline.jobs import JobQueue
@@ -68,14 +69,27 @@ async def _isolation_ok() -> bool:
 
 def test_demo_manifest_freezes_required_extraction_coverage_matrix() -> None:
     manifest = load_fixture_manifest(MANIFEST)
-    assert manifest.expected_ai_stages == ["CONDITION_EXTRACTION", "USER_EXPLANATION"]
-    assert set(manifest.coverage_matrix.model_dump()) == {
-        "native_hwpx",
-        "native_pdf",
-        "mixed_pdf",
-        "vision_ocr",
-        "limit_exceeded",
+    assert manifest.expected_ai_stages == ["OCR", "CONDITION_EXTRACTION", "USER_EXPLANATION"]
+    assert manifest.coverage_matrix.model_dump() == {
+        "native_hwpx": "native.hwpx",
+        "native_pdf": "native.pdf",
+        "mixed_pdf": "mixed.pdf",
+        "vision_ocr": "vision.png|vision.pdf",
+        "limit_exceeded": "limit-exceeded.metadata.json",
     }
+    attachments = {item.path: item for item in manifest.attachments}
+    assert "서울 소재 소기업" in extract_native(FIXTURE_ROOT / "native.hwpx").text
+    assert extract_native(FIXTURE_ROOT / "native.pdf").text
+    mixed = extract_native(FIXTURE_ROOT / "mixed.pdf")
+    assert mixed.text
+    assert decide_ocr(FIXTURE_ROOT / "mixed.pdf", mixed).required is False
+    for name in ("vision.png", "vision.pdf"):
+        extracted = extract_native(FIXTURE_ROOT / name)
+        assert extracted.text == ""
+        assert decide_ocr(FIXTURE_ROOT / name, extracted).required is True
+    limit = attachments["limit-exceeded.metadata.json"]
+    assert limit.expected_extraction == "LIMIT_EXCEEDED"
+    assert limit.declared_size_bytes == 20 * 1024 * 1024 + 1
 
 
 def test_fixture_loader_persists_traceable_inputs_and_publishes_decision(
@@ -93,7 +107,7 @@ def test_fixture_loader_persists_traceable_inputs_and_publishes_decision(
         assert first.decisions_published == 1
 
         async with session_factory.begin() as db:
-            source = await db.get(SourceFile, "demo-2026-001-body")
+            source = await db.get(SourceFile, "demo-2026-001-v2-body")
             assert source is not None and source.storage_path is not None
             stored_path = tmp_path / "sources" / source.storage_path
             source.storage_path = None
@@ -108,7 +122,7 @@ def test_fixture_loader_persists_traceable_inputs_and_publishes_decision(
         async with session_factory() as db:
             announcement = await db.get(Announcement, first.announcement_id)
             analysis = await db.get(AnalysisRun, first.analysis_run_id)
-            source = await db.get(SourceFile, "demo-2026-001-body")
+            source = await db.get(SourceFile, "demo-2026-001-v2-body")
             condition = await db.scalar(
                 select(ExtractedCondition).where(ExtractedCondition.analysis_run_id == analysis.id)
             )
@@ -153,7 +167,7 @@ def test_fixture_source_is_stored_and_downloadable_with_matching_hash(
             return result.announcement_id
 
     announcement_id = asyncio.run(load())
-    response = client.get(f"/api/v1/announcements/{announcement_id}/files/demo-2026-001-body")
+    response = client.get(f"/api/v1/announcements/{announcement_id}/files/demo-2026-001-v2-body")
     assert response.status_code == 200
     assert hashlib.sha256(response.content).hexdigest() == (
         "3f29f2c56d063859a75b63829e526d457c4b1cc1bb370bbec3c191dca5218d40"

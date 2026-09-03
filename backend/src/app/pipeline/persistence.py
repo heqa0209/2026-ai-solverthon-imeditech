@@ -124,7 +124,7 @@ async def _upsert_source_file(
             storage_path=storage_path,
             sha256=source.sha256,
             mime_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
-            size_bytes=path.stat().st_size,
+            size_bytes=source.declared_size_bytes or path.stat().st_size,
             source_order=order,
             source_priority=priority,
             download_status=(

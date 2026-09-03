@@ -1,0 +1,6 @@
+{
+  "fixture": "synthetic declared-size attachment",
+  "declaredSizeBytes": 20971521,
+  "binaryIncluded": false,
+  "reason": "Avoid committing a 20MB binary while preserving the limit contract."
+}

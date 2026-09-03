@@ -8,6 +8,22 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: solverthon
+          POSTGRES_USER: solverthon
+          POSTGRES_PASSWORD: solverthon
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U solverthon -d solverthon"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://solverthon:solverthon@127.0.0.1:5432/solverthon
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -15,7 +31,13 @@ jobs:
           python-version: "3.14"
       - run: uv sync --locked
         working-directory: backend
+      - run: uv run alembic upgrade head
+        working-directory: backend
+      - run: uv run alembic check
+        working-directory: backend
       - run: uv run ruff check src tests migrations
+        working-directory: backend
+      - run: uv run ruff format --check src tests migrations
         working-directory: backend
       - run: uv run pytest
         working-directory: backend
@@ -36,6 +58,10 @@ jobs:
       - run: npm run test -- --run
         working-directory: frontend
       - run: npm run build
+        working-directory: frontend
+      - run: npx playwright install --with-deps chrome
+        working-directory: frontend
+      - run: npm run test:e2e
         working-directory: frontend
 
   contracts:

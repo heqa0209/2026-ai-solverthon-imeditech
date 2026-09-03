@@ -1,13 +1,14 @@
 import { ArrowRight, CheckCircle2, FileSearch, ShieldCheck } from "lucide-react";
-import { Link, Navigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthProvider";
+import { AuthenticatedStart } from "../components/AuthenticatedStart";
 import { LoadingState } from "../components/States";
 
 export function LandingPage() {
   const { user, loading } = useAuth();
   if (loading) return <LoadingState />;
-  if (user) return <Navigate to="/announcements" replace />;
+  if (user) return <AuthenticatedStart />;
   return (
     <main className="landing">
       <header className="landing-header"><span className="brand-mark">IMT</span><Link className="button button-ghost" to="/login">로그인</Link></header>

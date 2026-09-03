@@ -1,14 +1,14 @@
 export type Verdict = "ELIGIBLE" | "NEEDS_CONFIRMATION" | "INELIGIBLE";
 export type ConditionStatus = "PASS" | "UNKNOWN" | "FAIL" | "NOT_APPLICABLE";
 export type InterestStatus = "INTERESTED" | "ON_HOLD" | "NOT_INTERESTED";
-export type DecisionFreshness = "CURRENT" | "COMPANY_CHANGED" | "ANNOUNCEMENT_CHANGED" | "RECALCULATING";
+export type DecisionFreshness = "CURRENT" | "COMPANY_PROFILE_CHANGED" | "ANNOUNCEMENT_CHANGED";
 
 export interface User { id: string; username: string }
 
 export interface ApiErrorBody {
   code: string;
   message: string;
-  details?: Array<{ loc?: Array<string | number>; path?: string; field?: string; reason?: string; message?: string }>;
+  details?: Array<{ location?: Array<string | number>; loc?: Array<string | number>; path?: string; field?: string; reason?: string; message?: string }>;
   requestId?: string;
 }
 
@@ -52,12 +52,12 @@ export interface AnnouncementListItem {
   announcementVersionId: string;
   companyProfileVersionId: string | null;
   title: string;
-  organization: string;
-  applicationStartDate: string | null;
-  applicationEndDate: string | null;
+  agencyName: string | null;
+  recruitmentStartsOn: string | null;
+  recruitmentEndsOn: string | null;
   recruitmentStatus: "OPEN" | "CLOSED" | "UNKNOWN";
-  verdict: Verdict;
-  verdictReason: string;
+  eligibility: Verdict;
+  reason: string;
   interestStatus: InterestStatus | null;
   decisionFreshness: DecisionFreshness;
   publishedAt?: string | null;
@@ -68,53 +68,64 @@ export interface AnnouncementListResponse { items: AnnouncementListItem[]; page:
 export interface Evidence {
   sourceFileId?: string | null;
   sourceVersion?: string | null;
-  sourceName: string;
+  sourceName: string | null;
   page: number | null;
   verbatimText: string;
 }
 
 export interface ConditionResult {
-  conditionId: string;
+  id: string;
+  conditionKey: string;
+  groupKey: string;
+  trackKey: string | null;
+  roleKey: string | null;
   kind: "MANDATORY" | "PREFERENCE" | "GUIDANCE" | "POST_AWARD";
-  label: string;
+  subject: string;
+  operator: string;
+  expectedValue: Record<string, unknown> | null;
+  unit: string | null;
+  referenceDate: string | null;
   status: ConditionStatus;
-  explanation: string;
+  usedValue: Record<string, unknown> | null;
+  explanation: string | null;
   assumptionCode?: string | null;
   evidence: Evidence[];
 }
 
-export interface RoleEstimate { roleKey: string; label: string; verdict: Verdict }
+export interface RolePrediction { roleKey: string; label: string; eligibility: Verdict | null }
 
 export interface AnnouncementQuestion {
   conditionId: string;
-  question: string;
-  valueType: "TEXT" | "BOOLEAN" | "NUMBER" | "DATE" | "SELECT";
-  options?: Array<{ value: string; label: string }>;
+  prompt: string;
+  valueType: string;
+  options: string[] | null;
   unit?: string | null;
   evidence: Evidence[];
-  answered?: boolean;
 }
 
 export interface SourceFile {
   id: string;
   name: string;
-  size: number | null;
+  sourceUrl: string;
+  sizeBytes: number | null;
+  mimeType: string | null;
+  sourceOrder: number;
   downloadStatus: "PENDING" | "SUCCEEDED" | "FAILED_RETRYABLE" | "FAILED_FINAL" | "LIMIT_EXCEEDED";
   extractionStatus: "PENDING" | "SUCCEEDED" | "FAILED_RETRYABLE" | "FAILED_FINAL" | "SKIPPED";
-  failureReason?: string | null;
+  failureCode: string | null;
 }
 
 export interface AnnouncementDetail extends AnnouncementListItem {
-  summary: string;
-  resultExplanation: string;
-  passedTrackLabels: string[];
+  publishedOn: string | null;
+  summary: string | null;
+  explanation: string | null;
+  passedTrackKey: string | null;
   selectedRoleKey: string | null;
-  roleEstimates: RoleEstimate[];
+  rolePredictions: RolePrediction[];
   conditions: ConditionResult[];
   questions: AnnouncementQuestion[];
   files: SourceFile[];
   sourceUrl: string;
-  description?: string | null;
 }
 
 export interface QueueResponse { requestId: string; status: "QUEUED" }

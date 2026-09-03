@@ -20,16 +20,17 @@ async function parseError(response: Response): Promise<ApiErrorBody> {
 }
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<{ data: T; response: Response }> {
-  const headers = new Headers(options.headers);
-  if (options.body !== undefined) headers.set("Content-Type", "application/json");
-  if (options.csrf) headers.set("X-CSRF-Token", await getCsrfToken());
+  const { body, csrf, redirectOnUnauthorized, ...fetchOptions } = options;
+  const headers = new Headers(fetchOptions.headers);
+  if (body !== undefined) headers.set("Content-Type", "application/json");
+  if (csrf) headers.set("X-CSRF-Token", await getCsrfToken());
   const response = await fetch(`${API_BASE}${path}`, {
-    ...options, headers, credentials: "include",
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    ...fetchOptions, headers, credentials: "include",
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!response.ok) {
     const error = new ApiError(response.status, await parseError(response));
-    if (response.status === 401 && options.redirectOnUnauthorized !== false) window.dispatchEvent(new CustomEvent("app:unauthorized"));
+    if (response.status === 401 && redirectOnUnauthorized !== false) window.dispatchEvent(new CustomEvent("app:unauthorized"));
     throw error;
   }
   const data = response.status === 204 ? undefined : await response.json();

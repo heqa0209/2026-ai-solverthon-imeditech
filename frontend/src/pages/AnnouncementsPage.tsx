@@ -44,7 +44,7 @@ export function AnnouncementsPage({ interests = false }: { interests?: boolean }
   }, [location.state, params.id]);
 
   const update = (key: string, value: string) => {
-    const next = new URLSearchParams(searchParams); if (value) next.set(key, value); else next.delete(key); next.set("page", "1"); setSearchParams(next);
+    const next = new URLSearchParams(searchParams); if (value) next.set(key, value); else next.delete(key); if (key !== "page") next.set("page", "1"); setSearchParams(next);
   };
   const submitSearch = (event: FormEvent) => { event.preventDefault(); update("keyword", keywordDraft.trim()); };
   const open = (id: string) => navigate(`/announcements/${id}`, { state: { backgroundPath: `${effectiveInterests ? "/interests" : "/announcements"}${searchParams.size ? `?${searchParams}` : ""}`, scrollY: window.scrollY } });

@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 import { takeReturnTo, useAuth } from "../auth/AuthProvider";
+import { AuthenticatedStart } from "../components/AuthenticatedStart";
 import { api, ApiError } from "../lib/api";
 
 export function LoginPage() {
@@ -12,7 +13,7 @@ export function LoginPage() {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  if (!loading && user) return <Navigate to="/announcements" replace />;
+  if (!loading && user) return <AuthenticatedStart />;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setError(""); setSubmitting(true);

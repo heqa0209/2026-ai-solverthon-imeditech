@@ -9,6 +9,6 @@ export function ConditionBadge({ status }: { status: ConditionStatus }) { return
 export function InterestBadge({ status }: { status: InterestStatus }) { return <span className={`interest-label interest-${status.toLowerCase()}`}>{interestLabels[status]}</span>; }
 export function FreshnessNotice({ freshness }: { freshness: DecisionFreshness }) {
   if (freshness === "CURRENT") return null;
-  const text = freshness === "COMPANY_CHANGED" ? "기업정보 변경 전 결과" : freshness === "ANNOUNCEMENT_CHANGED" ? "공고 변경 전 결과" : "변경 전 결과 · 새 판정 준비 중";
+  const text = freshness === "COMPANY_PROFILE_CHANGED" ? "기업정보 변경 전 결과" : "공고 변경 전 결과";
   return <span className="freshness-notice">{text}</span>;
 }

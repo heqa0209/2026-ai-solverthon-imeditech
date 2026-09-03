@@ -35,6 +35,9 @@ export function validateCompany(draft: Draft): Errors {
   }
   if (draft.annualRevenue && BigInt(digits(draft.annualRevenue) || "0") > 100000000000000000n) errors.annualRevenue = "매출액이 허용 범위를 넘었습니다.";
   if (draft.employeeCount && Number(draft.employeeCount) > 10_000_000) errors.employeeCount = "상시근로자 수가 허용 범위를 넘었습니다.";
+  if ((draft.primaryIndustry?.trim().length || 0) > 100) errors.primaryIndustry = "주업종은 100자 이하여야 합니다.";
+  if (draft.eligibleRegions.length > 50) errors.eligibleRegions = "적용 가능 지역을 더 이상 추가할 수 없습니다.";
+  if (draft.supportHistory.length > 100) errors.supportHistory = "수혜 이력을 더 이상 추가할 수 없습니다.";
   draft.supportHistory.forEach((item, index) => {
     if (!item.programName.trim()) errors[`supportHistory.${index}.programName`] = "사업명을 입력해 주세요.";
     if (item.programName.trim().length > 100) errors[`supportHistory.${index}.programName`] = "사업명은 100자 이하여야 합니다.";
@@ -61,6 +64,7 @@ export function buildCompanyInput(draft: Draft): CompanyProfileInput {
 function detailField(detail: NonNullable<ApiError["body"]["details"]>[number]): string | null {
   if (detail.field) return detail.field;
   if (detail.path) return detail.path.replace(/^body\.?/, "");
+  if (detail.location) return detail.location.filter((part) => part !== "body").join(".");
   if (detail.loc) return detail.loc.filter((part) => part !== "body").join(".");
   return null;
 }
@@ -137,7 +141,7 @@ export function CompanyPage() {
         </div></section>
 
         <section className="form-card"><div className="section-heading"><span>04</span><div><h2>이력과 역량</h2><p>지원 수혜 이력과 기업의 역량을 기록합니다.</p></div></div><div className="form-grid">
-          <div className="field-wide field-group"><label>정부지원 수혜 이력</label>{draft.supportHistory.map((item, index) => <div className="history-row" key={`${index}-${item.year}`}><div><input aria-label={`수혜 사업명 ${index + 1}`} placeholder="사업명" value={item.programName} onChange={(e) => change("supportHistory", draft.supportHistory.map((current, itemIndex) => itemIndex === index ? { ...current, programName: e.target.value } : current))} />{errors[`supportHistory.${index}.programName`] && <p className="field-error">{errors[`supportHistory.${index}.programName`]}</p>}</div><div><input aria-label={`수혜 연도 ${index + 1}`} type="number" placeholder="연도" value={item.year || ""} onChange={(e) => change("supportHistory", draft.supportHistory.map((current, itemIndex) => itemIndex === index ? { ...current, year: Number(e.target.value) } : current))} />{errors[`supportHistory.${index}.year`] && <p className="field-error">{errors[`supportHistory.${index}.year`]}</p>}</div><button className="icon-button" type="button" onClick={() => change("supportHistory", draft.supportHistory.filter((_, itemIndex) => itemIndex !== index))} aria-label={`${index + 1}번 수혜 이력 삭제`}><Trash2 size={17} /></button></div>)}<button type="button" className="button button-secondary add-history" onClick={() => change("supportHistory", [...draft.supportHistory, { programName: "", year: new Date().getFullYear() }])}>수혜 이력 추가</button></div>
+          <div className="field-wide field-group"><label>정부지원 수혜 이력</label>{draft.supportHistory.map((item, index) => <div className="history-row" key={`${index}-${item.year}`}><div><input aria-label={`수혜 사업명 ${index + 1}`} placeholder="사업명" value={item.programName} onChange={(e) => change("supportHistory", draft.supportHistory.map((current, itemIndex) => itemIndex === index ? { ...current, programName: e.target.value } : current))} />{errors[`supportHistory.${index}.programName`] && <p className="field-error">{errors[`supportHistory.${index}.programName`]}</p>}</div><div><input aria-label={`수혜 연도 ${index + 1}`} type="number" placeholder="연도" value={item.year || ""} onChange={(e) => change("supportHistory", draft.supportHistory.map((current, itemIndex) => itemIndex === index ? { ...current, year: Number(e.target.value) } : current))} />{errors[`supportHistory.${index}.year`] && <p className="field-error">{errors[`supportHistory.${index}.year`]}</p>}</div><button className="icon-button" type="button" onClick={() => change("supportHistory", draft.supportHistory.filter((_, itemIndex) => itemIndex !== index))} aria-label={`${index + 1}번 수혜 이력 삭제`}><Trash2 size={17} /></button></div>)}{errors.supportHistory && <p className="field-error">{errors.supportHistory}</p>}<button type="button" className="button button-secondary add-history" disabled={draft.supportHistory.length >= 100} onClick={() => change("supportHistory", [...draft.supportHistory, { programName: "", year: new Date().getFullYear() }])}>수혜 이력 추가</button></div>
           <div className="field-wide"><TagInput label="제품·서비스·기술 태그" value={draft.capabilityTags} onChange={(value) => change("capabilityTags", value)} placeholder="역량을 입력하고 추가" error={errors.capabilityTags} /></div>
         </div></section>
 

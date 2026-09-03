@@ -17,7 +17,7 @@ ASSIGNMENT = re.compile(
     r"(BIZINFO_API_KEY|SESSION_SECRET|CLOUDFLARE_API_TOKEN|VERCEL_TOKEN|OPENAI_API_KEY)"
     r"\s*[=:]\s*[\"']?([^\s\"'#]+)"
 )
-PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----"
+PRIVATE_KEY = "-----BEGIN " + "PRIVATE KEY-----"
 SAFE_MARKERS = ("change-me", "replace", "example", "fixture", "fake", "test", "<", "${")
 
 

@@ -222,7 +222,7 @@ async def persist_demo_fixture(
                     condition_key=condition.condition_id,
                     group_key=condition.group_id,
                     track_key=group.track_ids[0] if len(group.track_ids) == 1 else None,
-                    role_key=group.role_ids[0] if len(group.role_ids) == 1 else None,
+                    role_key=group.role_keys[0] if len(group.role_keys) == 1 else None,
                     kind=condition.kind.value,
                     subject=condition.subject.value,
                     operator=condition.operator.value,

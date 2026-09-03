@@ -34,7 +34,7 @@ def valid_ir_data() -> dict:
                 "parent_group_id": None,
                 "operator": "ALL",
                 "track_ids": ["general"],
-                "role_ids": [],
+                "role_keys": [],
             }
         ],
         "conditions": [
@@ -60,6 +60,38 @@ def valid_ir_data() -> dict:
         ],
         "questions": [],
     }
+
+
+def test_canonical_ir_uses_role_keys_as_the_single_role_identifier() -> None:
+    data = valid_ir_data()
+    data["roles"] = [{"role_key": "LEAD", "label": "주관기관"}]
+    data["groups"][0]["role_keys"] = ["LEAD"]
+    parsed = CanonicalIR.model_validate(data)
+    assert parsed.roles[0].role_key == "LEAD"
+    assert parsed.groups[0].role_keys == ["LEAD"]
+
+    data["roles"] = [{"role_id": "LEAD", "label": "주관기관"}]
+    with pytest.raises(ValidationError):
+        CanonicalIR.model_validate(data)
+
+
+def test_canonical_question_preserves_answer_contract_and_evidence() -> None:
+    data = valid_ir_data()
+    data["questions"] = [
+        {
+            "question_id": "q1",
+            "condition_id": "c1",
+            "prompt": "상시근로자 수를 입력해 주세요.",
+            "answer_type": "INTEGER",
+            "options": None,
+            "unit": "명",
+            "evidence": data["conditions"][0]["evidence"],
+        }
+    ]
+    question = CanonicalIR.model_validate(data).questions[0]
+    assert question.answer_type == "INTEGER"
+    assert question.unit == "명"
+    assert question.evidence[0].verbatim_text == "서울 소재 중소기업"
 
 
 def test_canonical_ir_is_closed_and_evidence_must_be_verbatim() -> None:
@@ -147,6 +179,14 @@ async def test_codex_builder_is_ephemeral_read_only_and_strips_app_secrets(tmp_p
         },
     )
     assert invocation.args[:4] == ("codex", "exec", "--ignore-user-config", "--ignore-rules")
+    assert "--strict-config" in invocation.args
+    disabled = {
+        invocation.args[index + 1]
+        for index, value in enumerate(invocation.args[:-1])
+        if value == "--disable"
+    }
+    assert {"shell_tool", "unified_exec", "apps", "browser_use", "computer_use"} <= disabled
+    assert "--search" not in invocation.args
     assert "--ephemeral" in invocation.args
     assert invocation.args[invocation.args.index("--sandbox") + 1] == "read-only"
     assert invocation.args[invocation.args.index("--model") + 1] == "gpt-5.6-luna"

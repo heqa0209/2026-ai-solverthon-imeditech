@@ -41,6 +41,26 @@ AI_STAGE_POLICIES: dict[AIStage, StagePolicy] = {
 
 _ENV_ALLOWLIST = {"CODEX_HOME", "LANG", "LC_ALL", "PATH", "SSL_CERT_FILE", "TMPDIR"}
 MAX_AI_OUTPUT_BYTES = 5 * 1024 * 1024
+_DISABLED_CODEX_FEATURES = (
+    "shell_tool",
+    "unified_exec",
+    "apps",
+    "browser_use",
+    "browser_use_external",
+    "browser_use_full_cdp_access",
+    "code_mode_host",
+    "computer_use",
+    "hooks",
+    "image_generation",
+    "multi_agent",
+    "multi_agent_v2",
+    "plugins",
+    "skill_search",
+    "sleep_tool",
+    "tool_suggest",
+    "view_image",
+    "workspace_dependencies",
+)
 
 
 @dataclass(frozen=True)
@@ -116,11 +136,16 @@ def build_codex_invocation(
     env_source = os.environ if source_env is None else source_env
     env = {key: value for key, value in env_source.items() if key in _ENV_ALLOWLIST}
     env["TMPDIR"] = str(resolved_temp)
+    disabled_feature_args = tuple(
+        argument for feature in _DISABLED_CODEX_FEATURES for argument in ("--disable", feature)
+    )
     args = (
         "codex",
         "exec",
         "--ignore-user-config",
         "--ignore-rules",
+        "--strict-config",
+        *disabled_feature_args,
         "--sandbox",
         "read-only",
         "--cd",

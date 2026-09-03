@@ -15,6 +15,7 @@ from app.auth import AuthContext, current_auth, require_csrf
 from app.company import _current_profile
 from app.config import Settings, get_settings
 from app.db import get_db
+from app.domain.eligibility import evaluate_decision
 from app.enums import ConditionStatus, DecisionFreshness, Verdict
 from app.errors import ApiError
 from app.jobs import enqueue_job
@@ -88,6 +89,8 @@ def _list_item(
         id=announcement.id,
         announcementVersionId=version.id,
         companyProfileVersionId=decision.company_profile_version_id,
+        decisionId=decision.id,
+        decisionPublishedAt=decision.created_at,
         title=version.title,
         agencyName=version.agency_name,
         recruitmentStartsOn=version.recruitment_starts_on,
@@ -315,17 +318,24 @@ async def announcement_detail(
         .order_by(desc(AnnouncementRoleSelection.created_at))
         .limit(1)
     )
-    role_predictions = [
-        RolePredictionView(
-            roleKey=str(role.get("role_key") or role.get("roleKey")),
-            label=str(
-                role.get("label") or role.get("name") or role.get("role_key") or role.get("roleKey")
-            ),
-            eligibility=role.get("eligibility") or role.get("expected_verdict"),
+    profile_snapshot = current_profile[1].snapshot if current_profile else None
+    role_predictions = []
+    for role in ir.get("roles", []):
+        if not isinstance(role, dict) or not role.get("role_key"):
+            continue
+        role_key = str(role["role_key"])
+        prediction = (
+            evaluate_decision(ir, profile_snapshot, role_key)
+            if profile_snapshot is not None
+            else None
         )
-        for role in ir.get("roles", [])
-        if isinstance(role, dict) and (role.get("role_key") or role.get("roleKey"))
-    ]
+        role_predictions.append(
+            RolePredictionView(
+                roleKey=role_key,
+                label=str(role.get("label") or role_key),
+                eligibility=prediction.verdict if prediction else None,
+            )
+        )
     condition_ids = {condition.condition_key: condition.id for condition, _ in condition_rows}
     questions = [
         QuestionView(
@@ -334,7 +344,7 @@ async def announcement_detail(
                 str(question.get("condition_id") or question.get("conditionId")),
             ),
             prompt=str(question.get("prompt") or question.get("question") or "확인이 필요합니다."),
-            valueType=str(question.get("value_type") or question.get("valueType") or "STRING"),
+            valueType=str(question.get("answer_type") or "STRING"),
             options=question.get("options"),
             unit=question.get("unit"),
             evidence=_evidence(question.get("evidence")),
@@ -453,9 +463,9 @@ async def set_role(
         .limit(1)
     )
     valid_roles = {
-        role.get("role_key") or role.get("roleKey")
+        role.get("role_key")
         for role in ((analysis.canonical_ir or {}).get("roles", []) if analysis else [])
-        if isinstance(role, dict)
+        if isinstance(role, dict) and role.get("role_key")
     }
     if body.roleKey is not None and body.roleKey not in valid_roles:
         raise ApiError(422, "ROLE_INVALID", "선택할 수 없는 역할입니다.")
@@ -494,6 +504,33 @@ async def set_role(
     return QueuedResponse(requestId=job.id)
 
 
+def _validate_answer_value(question: dict[str, Any], value: object) -> None:
+    answer_type = question.get("answer_type")
+    valid = False
+    if answer_type == "STRING":
+        valid = type(value) is str
+    elif answer_type == "INTEGER":
+        valid = type(value) is int
+    elif answer_type == "DATE":
+        if type(value) is str:
+            try:
+                date.fromisoformat(value)
+                valid = True
+            except ValueError:
+                pass
+    elif answer_type == "BOOLEAN":
+        valid = type(value) is bool
+    elif answer_type == "STRING_SET":
+        valid = isinstance(value, list) and all(type(item) is str for item in value)
+
+    options = question.get("options")
+    if valid and isinstance(options, list):
+        values = value if isinstance(value, list) else [value]
+        valid = all(str(item) in options for item in values)
+    if not valid:
+        raise ApiError(422, "ANSWER_TYPE_INVALID", "질문에 필요한 자료형으로 답변해 주세요.")
+
+
 @router.post("/{announcement_id}/answers", response_model=QueuedResponse, status_code=202)
 async def answer_condition(
     announcement_id: str,
@@ -514,6 +551,18 @@ async def answer_condition(
     )
     if condition is None:
         raise ApiError(404, "CONDITION_NOT_FOUND", "조건을 찾을 수 없습니다.")
+    analysis = await db.get(AnalysisRun, condition.analysis_run_id)
+    question = next(
+        (
+            item
+            for item in ((analysis.canonical_ir or {}).get("questions", []) if analysis else [])
+            if isinstance(item, dict) and item.get("condition_id") == condition.condition_key
+        ),
+        None,
+    )
+    if question is None:
+        raise ApiError(422, "ANSWER_NOT_REQUESTED", "이 조건에는 저장할 질문이 없습니다.")
+    _validate_answer_value(question, body.value)
     answer_payload = body.model_dump(mode="json")
     latest = await db.scalar(
         select(AnnouncementAnswer)

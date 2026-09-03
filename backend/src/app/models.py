@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -185,6 +186,14 @@ class EligibilityDecision(Base):
     __table_args__ = (
         Index(
             "ix_decision_inputs", "user_id", "announcement_version_id", "company_profile_version_id"
+        ),
+        Index(
+            "uq_current_decision_user_announcement",
+            "user_id",
+            "announcement_id",
+            unique=True,
+            postgresql_where=text("is_current"),
+            sqlite_where=text("is_current = 1"),
         ),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)

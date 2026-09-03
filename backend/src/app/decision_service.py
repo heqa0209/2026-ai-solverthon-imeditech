@@ -1,20 +1,40 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.eligibility import Evaluation, evaluate_condition, evaluate_decision
 from app.enums import ConditionStatus
 from app.models import (
     AnalysisRun,
+    Announcement,
     AnnouncementAnswer,
     CompanyProfileVersion,
     ConditionResult,
     EligibilityDecision,
     ExtractedCondition,
 )
+
+
+def _decision_lock_key(user_id: str, announcement_id: str) -> int:
+    digest = hashlib.blake2b(
+        f"{user_id}\0{announcement_id}".encode(), digest_size=8
+    ).digest()
+    return int.from_bytes(digest, byteorder="big", signed=True)
+
+
+async def _serialize_publication(db: AsyncSession, *, user_id: str, announcement_id: str) -> None:
+    if db.get_bind().dialect.name == "postgresql":
+        await db.execute(
+            select(func.pg_advisory_xact_lock(_decision_lock_key(user_id, announcement_id)))
+        )
+        return
+    await db.execute(
+        select(Announcement.id).where(Announcement.id == announcement_id).with_for_update()
+    )
 
 
 async def publish_deterministic_decision(
@@ -76,6 +96,7 @@ async def publish_deterministic_decision(
         condition_values=condition_values,
     )
 
+    await _serialize_publication(db, user_id=user_id, announcement_id=announcement_id)
     await db.execute(
         update(EligibilityDecision)
         .where(

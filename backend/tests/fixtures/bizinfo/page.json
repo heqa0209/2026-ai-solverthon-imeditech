@@ -1,0 +1,22 @@
+{
+  "jsonArray": [
+    {
+      "pblancId": "PBLN-2026-001",
+      "pblancNm": "2026 제조혁신 지원사업",
+      "pblancUrl": "https://www.bizinfo.go.kr/example/PBLN-2026-001",
+      "jrsdInsttNm": "중소벤처기업부",
+      "bsnsSumryCn": "제조 중소기업의 혁신을 지원합니다.",
+      "pblancCn": "본 사업은 서울 소재 중소기업을 지원합니다.",
+      "creatPnttm": "20260901",
+      "reqstBeginEndDe": "2026-09-01 ~ 2026-09-30",
+      "attachments": [
+        {
+          "fileNm": "공고문.pdf",
+          "fileCours": "https://www.bizinfo.go.kr/files/notice.pdf",
+          "fileSize": "1024"
+        }
+      ]
+    }
+  ],
+  "totalCount": "1"
+}

@@ -1,0 +1,45 @@
+{
+  "analysis_version": "fixture-analysis-v1",
+  "summary": "소기업을 지원하는 합성 시연 공고입니다.",
+  "tracks": [
+    {
+      "track_id": "general",
+      "label": "일반"
+    }
+  ],
+  "roles": [],
+  "groups": [
+    {
+      "group_id": "root",
+      "parent_group_id": null,
+      "operator": "ALL",
+      "track_ids": ["general"],
+      "role_ids": []
+    }
+  ],
+  "conditions": [
+    {
+      "condition_id": "company-scale-small",
+      "group_id": "root",
+      "kind": "MANDATORY",
+      "subject": "COMPANY_SCALE",
+      "operator": "EQ",
+      "expected_value": {
+        "type": "ENUM",
+        "value": "SMALL"
+      },
+      "unit": null,
+      "reference_date": null,
+      "evidence": [
+        {
+          "source_file_id": "demo-2026-001-body",
+          "source_version": "3f29f2c56d063859a75b63829e526d457c4b1cc1bb370bbec3c191dca5218d40",
+          "page": null,
+          "verbatim_text": "지원 대상은 소기업입니다.",
+          "source_priority": 10
+        }
+      ]
+    }
+  ],
+  "questions": []
+}

@@ -6,11 +6,22 @@ from typing import Annotated
 import typer
 
 from app.auth import create_user, reset_password
+from app.config import get_settings
 from app.db import SessionFactory
+from app.pipeline.cli import register_pipeline_commands
+from app.pipeline.service import DatabasePipelineCLIService
 
 app = typer.Typer(help="AI Solverthon administration CLI")
 user_app = typer.Typer(help="Manage pre-created login users")
 app.add_typer(user_app, name="user")
+pipeline_settings = get_settings()
+register_pipeline_commands(
+    app,
+    DatabasePipelineCLIService(
+        SessionFactory,
+        fixture_root=pipeline_settings.demo_fixture_root,
+    ),
+)
 
 
 async def _create(username: str, password: str) -> None:

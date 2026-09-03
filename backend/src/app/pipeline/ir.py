@@ -229,9 +229,7 @@ def validate_evidence(ir: CanonicalIR, sources: list[EvidenceSource]) -> None:
                     f"Unknown evidence source for condition {condition.condition_id}"
                 )
             haystack = (
-                source.pages.get(evidence.page, "")
-                if evidence.page is not None
-                else source.text
+                source.pages.get(evidence.page, "") if evidence.page is not None else source.text
             )
             if not evidence.verbatim_text.strip() or evidence.verbatim_text not in haystack:
                 raise EvidenceValidationError(

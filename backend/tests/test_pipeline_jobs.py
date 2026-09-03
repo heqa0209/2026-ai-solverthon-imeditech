@@ -45,6 +45,7 @@ async def test_idempotent_enqueue_claim_heartbeat_and_complete(queue: JobQueue) 
     assert await queue.heartbeat(
         job_id=claimed.id, owner="worker-1", now=now + timedelta(seconds=30)
     )
+
     async def publish(_session, locked_job) -> None:
         locked_job.payload = {"published": True}
 
@@ -136,9 +137,7 @@ async def test_worker_runs_jobs_with_independent_handler_and_marks_success(queue
 @pytest.mark.asyncio
 async def test_worker_does_not_fallback_when_handler_is_missing(queue: JobQueue) -> None:
     job, _ = await queue.enqueue(job_type="unknown", payload={}, idempotency_key="unknown")
-    worker = Worker(
-        worker_id="worker", queue=queue, handlers={}, isolation_check=_isolation_ok
-    )
+    worker = Worker(worker_id="worker", queue=queue, handlers={}, isolation_check=_isolation_ok)
     await worker.run_once()
     failed = await queue.status(job_id=job.id)
     assert failed is not None

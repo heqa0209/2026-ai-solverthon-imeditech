@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import desc, select
@@ -28,9 +29,11 @@ class DatabasePipelineCLIService(PipelineCLIService):
         sessions: async_sessionmaker[AsyncSession],
         *,
         fixture_root: Path,
+        source_storage_root: Path,
     ):
         self.sessions = sessions
         self.fixture_root = fixture_root.resolve()
+        self.source_storage_root = source_storage_root.resolve()
         self.queue = JobQueue(sessions)
 
     async def _announcement(self, db: AsyncSession, target_id: str | None) -> Announcement | None:
@@ -86,7 +89,11 @@ class DatabasePipelineCLIService(PipelineCLIService):
             if operation in {"collect.run", "collect.reconcile"}:
                 job_type = "BIZINFO_COLLECT" if operation == "collect.run" else "BIZINFO_RECONCILE"
                 scope = "DAILY" if operation.endswith("run") else "FULL"
-                await enqueue_job(db, job_type, {"scope": scope})
+                await enqueue_job(
+                    db,
+                    job_type,
+                    {"scope": scope, "requestedAt": datetime.now(UTC).isoformat()},
+                )
                 await db.commit()
                 return 1
             announcement = await self._announcement(db, target_id)
@@ -144,7 +151,9 @@ class DatabasePipelineCLIService(PipelineCLIService):
 
     async def load_fixture(self, manifest_path: Path) -> int:
         async with self.sessions.begin() as db:
-            result = await persist_demo_fixture(db, manifest_path)
+            result = await persist_demo_fixture(
+                db, manifest_path, source_storage_root=self.source_storage_root
+            )
             return result.processed
 
     async def run_holdout(self, manifest_path: Path) -> tuple[int, bool]:

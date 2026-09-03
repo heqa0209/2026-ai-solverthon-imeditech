@@ -20,6 +20,7 @@ register_pipeline_commands(
     DatabasePipelineCLIService(
         SessionFactory,
         fixture_root=pipeline_settings.demo_fixture_root,
+        source_storage_root=pipeline_settings.source_storage_root,
     ),
 )
 

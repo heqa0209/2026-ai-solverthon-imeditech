@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import mimetypes
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -18,6 +19,7 @@ from app.models import (
     ExtractedCondition,
     SourceFile,
 )
+from app.pipeline.attachments import store_attachment
 from app.pipeline.bizinfo import parse_bizinfo_page
 from app.pipeline.extraction import extract_native
 from app.pipeline.fixtures import (
@@ -38,6 +40,12 @@ class FixtureLoadResult:
     decisions_published: int
     version_created: bool
     analysis_created: bool
+
+
+def _prepare_storage_root(path: Path) -> Path:
+    root = path.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def _fixture_path(manifest_path: Path, relative: str) -> Path:
@@ -69,6 +77,7 @@ async def _upsert_source_file(
     source_url: str,
     order: int,
     priority: int,
+    source_storage_root: Path,
 ) -> EvidenceSource:
     text, failure_code = _source_text(manifest_path, source)
     path = _fixture_path(manifest_path, source.path)
@@ -76,12 +85,22 @@ async def _upsert_source_file(
     if row is not None and row.announcement_version_id != version.id:
         raise ValueError(f"Fixture source id already belongs to another version: {row.id}")
     if row is None:
+        storage_path = None
+        if source.expected_extraction != "LIMIT_EXCEEDED":
+            relative = Path(version.id) / f"{source.source_file_id}-{path.name}"
+            target = (source_storage_root / relative).resolve()
+            if not target.is_relative_to(source_storage_root):
+                raise ValueError("Fixture storage path escapes source root")
+            stored = store_attachment(path, target)
+            if stored.sha256 != source.sha256:
+                raise ValueError(f"Stored fixture hash mismatch: {source.path}")
+            storage_path = relative.as_posix()
         row = SourceFile(
             id=source.source_file_id,
             announcement_version_id=version.id,
             name=path.name,
             source_url=source_url,
-            storage_path=None,
+            storage_path=storage_path,
             sha256=source.sha256,
             mime_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
             size_bytes=path.stat().st_size,
@@ -109,11 +128,13 @@ async def persist_demo_fixture(
     db: AsyncSession,
     manifest_path: Path,
     *,
+    source_storage_root: Path,
     publish_for_profiles: bool = True,
 ) -> FixtureLoadResult:
     """Persist one validated fixture and publish deterministic decisions atomically."""
 
     manifest: DemoFixtureManifest = load_fixture_manifest(manifest_path)
+    source_storage_root = await asyncio.to_thread(_prepare_storage_root, source_storage_root)
     wrapper = load_wrapper(manifest_path, manifest)
     page = parse_bizinfo_page(wrapper, page_index=1, page_unit=100)
     parsed = next(item for item in page.items if item.source_id == manifest.announcement_id)
@@ -174,6 +195,7 @@ async def persist_demo_fixture(
             source_url=parsed.source_url,
             order=0,
             priority=10,
+            source_storage_root=source_storage_root,
         )
     ]
     for order, source in enumerate(manifest.attachments, start=1):
@@ -189,6 +211,7 @@ async def persist_demo_fixture(
                 source_url=metadata.url if metadata else parsed.source_url,
                 order=order,
                 priority=20,
+                source_storage_root=source_storage_root,
             )
         )
     validate_evidence(canonical_ir, evidence_sources)

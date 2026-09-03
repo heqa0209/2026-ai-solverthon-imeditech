@@ -67,7 +67,7 @@ def register_pipeline_commands(root: typer.Typer, service: PipelineCLIService) -
         if not yes and not typer.confirm("Proceed with exactly this scope?"):
             raise typer.Abort()
         count = asyncio.run(service.execute(operation, target_id))
-        typer.echo(f"processed={count}")
+        typer.echo(f"enqueued={count}")
         if count == 0:
             raise typer.Exit(code=2)
 

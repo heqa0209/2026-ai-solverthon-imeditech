@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import desc, select
@@ -48,6 +48,16 @@ class AnnouncementAnalyzer(Protocol):
     ) -> Publisher: ...
 
 
+class CollectionPayload(StrictJobPayload):
+    scope: Literal["DAILY", "FULL"]
+    scheduled_for: str | None = None
+    requested_at: str | None = None
+
+
+class AnnouncementCollector(Protocol):
+    async def prepare(self, *, scope: str, context: JobContext) -> Publisher: ...
+
+
 def _normalize_payload(raw: dict[str, Any]) -> dict[str, Any]:
     aliases = {
         "userId": "user_id",
@@ -56,6 +66,8 @@ def _normalize_payload(raw: dict[str, Any]) -> dict[str, Any]:
         "companyProfileVersionId": "company_profile_version_id",
         "selectedRoleKey": "selected_role_key",
         "fixtureManifest": "fixture_manifest",
+        "scheduledFor": "scheduled_for",
+        "requestedAt": "requested_at",
     }
     return {aliases.get(key, key): value for key, value in raw.items()}
 
@@ -131,6 +143,7 @@ def decision_reevaluate_handler(
 def announcement_analyze_handler(
     *,
     fixture_root: Path,
+    source_storage_root: Path,
     analyzer: AnnouncementAnalyzer | None = None,
 ) -> JobHandler:
     root = fixture_root.resolve()
@@ -150,7 +163,9 @@ def announcement_analyze_handler(
                 )
 
             async def publish(db: AsyncSession, _job) -> None:
-                result = await persist_demo_fixture(db, manifest_path)
+                result = await persist_demo_fixture(
+                    db, manifest_path, source_storage_root=source_storage_root
+                )
                 if payload.announcement_id and result.announcement_id != payload.announcement_id:
                     raise ValueError("Fixture announcement does not match requested announcement")
 
@@ -167,9 +182,34 @@ def announcement_analyze_handler(
     return handle
 
 
-def unsupported_job_handler(code: str) -> JobHandler:
-    async def handle(_payload: dict[str, Any], _context: JobContext) -> JobOutcome:
-        raise AIExecutionError(code, "This worker operation is not configured", retryable=False)
+def collection_handler(
+    *,
+    collector: AnnouncementCollector | None,
+    required_scope: Literal["DAILY", "FULL"],
+) -> JobHandler:
+    async def handle(raw: dict[str, Any], context: JobContext) -> JobOutcome:
+        if collector is None:
+            raise AIExecutionError(
+                "BIZINFO_COLLECTOR_UNAVAILABLE",
+                "Bizinfo collector is not configured",
+                retryable=False,
+            )
+        try:
+            payload = CollectionPayload.model_validate(_normalize_payload(raw))
+        except ValueError as exc:
+            raise AIExecutionError(
+                "COLLECTION_JOB_PAYLOAD_INVALID",
+                "Collection job payload is invalid",
+                retryable=False,
+            ) from exc
+        if payload.scope != required_scope:
+            raise AIExecutionError(
+                "COLLECTION_SCOPE_INVALID",
+                "Collection job scope does not match its handler",
+                retryable=False,
+            )
+        publisher = await collector.prepare(scope=payload.scope, context=context)
+        return JobOutcome(publisher=publisher)
 
     return handle
 
@@ -178,13 +218,18 @@ def build_handler_registry(
     *,
     sessions: async_sessionmaker[AsyncSession],
     fixture_root: Path,
+    source_storage_root: Path,
     analyzer: AnnouncementAnalyzer | None = None,
+    collector: AnnouncementCollector | None = None,
 ) -> Mapping[str, JobHandler]:
+    source_storage_root = source_storage_root.resolve()
     return {
         "DECISION_REEVALUATE": decision_reevaluate_handler(sessions),
         "ANNOUNCEMENT_ANALYZE": announcement_analyze_handler(
-            fixture_root=fixture_root, analyzer=analyzer
+            fixture_root=fixture_root,
+            source_storage_root=source_storage_root,
+            analyzer=analyzer,
         ),
-        "BIZINFO_COLLECT": unsupported_job_handler("BIZINFO_COLLECTOR_UNAVAILABLE"),
-        "BIZINFO_RECONCILE": unsupported_job_handler("BIZINFO_RECONCILER_UNAVAILABLE"),
+        "BIZINFO_COLLECT": collection_handler(collector=collector, required_scope="DAILY"),
+        "BIZINFO_RECONCILE": collection_handler(collector=collector, required_scope="FULL"),
     }

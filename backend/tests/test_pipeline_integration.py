@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -65,19 +66,23 @@ async def _isolation_ok() -> bool:
 
 
 def test_fixture_loader_persists_traceable_inputs_and_publishes_decision(
-    session_factory,
+    session_factory, tmp_path: Path
 ) -> None:
     async def scenario() -> None:
         profile_version = await _profile(session_factory)
         async with session_factory.begin() as db:
-            first = await persist_demo_fixture(db, MANIFEST)
+            first = await persist_demo_fixture(
+                db, MANIFEST, source_storage_root=tmp_path / "sources"
+            )
         assert first.processed == 1
         assert first.version_created is True
         assert first.analysis_created is True
         assert first.decisions_published == 1
 
         async with session_factory.begin() as db:
-            second = await persist_demo_fixture(db, MANIFEST)
+            second = await persist_demo_fixture(
+                db, MANIFEST, source_storage_root=tmp_path / "sources"
+            )
         assert second.processed == 0
 
         async with session_factory() as db:
@@ -107,11 +112,41 @@ def test_fixture_loader_persists_traceable_inputs_and_publishes_decision(
     asyncio.run(scenario())
 
 
-def test_decision_job_handler_publishes_new_profile_version(session_factory) -> None:
+def test_fixture_source_is_stored_and_downloadable_with_matching_hash(
+    authenticated_client, session_factory, settings
+) -> None:
+    client, csrf = authenticated_client
+    saved = client.put(
+        "/api/v1/company",
+        json={"companyName": "합성 테스트 기업", "companyScale": "SMALL"},
+        headers={"Origin": "http://testserver", "X-CSRF-Token": csrf, "If-Match": '"0"'},
+    )
+    assert saved.status_code == 200
+
+    async def load() -> str:
+        async with session_factory.begin() as db:
+            result = await persist_demo_fixture(
+                db, MANIFEST, source_storage_root=settings.source_storage_root
+            )
+            return result.announcement_id
+
+    announcement_id = asyncio.run(load())
+    response = client.get(f"/api/v1/announcements/{announcement_id}/files/demo-2026-001-body")
+    assert response.status_code == 200
+    assert hashlib.sha256(response.content).hexdigest() == (
+        "3f29f2c56d063859a75b63829e526d457c4b1cc1bb370bbec3c191dca5218d40"
+    )
+
+
+def test_decision_job_handler_publishes_new_profile_version(
+    session_factory, tmp_path: Path
+) -> None:
     async def scenario() -> None:
         await _profile(session_factory, scale="SMALL")
         async with session_factory.begin() as db:
-            loaded = await persist_demo_fixture(db, MANIFEST)
+            loaded = await persist_demo_fixture(
+                db, MANIFEST, source_storage_root=tmp_path / "sources"
+            )
         large_profile = await _profile(session_factory, scale="LARGE")
         async with session_factory() as db:
             user = await db.get(User, large_profile.user_id)
@@ -134,6 +169,7 @@ def test_decision_job_handler_publishes_new_profile_version(session_factory) -> 
             handlers=build_handler_registry(
                 sessions=session_factory,
                 fixture_root=FIXTURE_ROOT,
+                source_storage_root=tmp_path / "sources",
             ),
             isolation_check=_isolation_ok,
         )
@@ -154,7 +190,7 @@ def test_decision_job_handler_publishes_new_profile_version(session_factory) -> 
 
 
 def test_analysis_handler_supports_fixture_and_fails_without_real_executor(
-    session_factory,
+    session_factory, tmp_path: Path
 ) -> None:
     async def scenario() -> None:
         async with session_factory() as db:
@@ -171,6 +207,7 @@ def test_analysis_handler_supports_fixture_and_fails_without_real_executor(
             handlers=build_handler_registry(
                 sessions=session_factory,
                 fixture_root=FIXTURE_ROOT,
+                source_storage_root=tmp_path / "sources",
             ),
             isolation_check=_isolation_ok,
         )
@@ -200,10 +237,16 @@ def test_analysis_handler_supports_fixture_and_fails_without_real_executor(
     asyncio.run(scenario())
 
 
-def test_database_cli_service_loads_fixture_and_central_cli_is_wired(session_factory) -> None:
+def test_database_cli_service_loads_fixture_and_central_cli_is_wired(
+    session_factory, tmp_path: Path
+) -> None:
     async def load() -> int:
         await _profile(session_factory)
-        service = DatabasePipelineCLIService(session_factory, fixture_root=FIXTURE_ROOT)
+        service = DatabasePipelineCLIService(
+            session_factory,
+            fixture_root=FIXTURE_ROOT,
+            source_storage_root=tmp_path / "sources",
+        )
         return await service.load_fixture(MANIFEST)
 
     assert asyncio.run(load()) == 1
@@ -213,10 +256,14 @@ def test_database_cli_service_loads_fixture_and_central_cli_is_wired(session_fac
         assert command in help_result.output
 
 
-def test_database_cli_service_enqueues_scoped_decision_job(session_factory) -> None:
+def test_database_cli_service_enqueues_scoped_decision_job(session_factory, tmp_path: Path) -> None:
     async def scenario() -> None:
         await _profile(session_factory)
-        service = DatabasePipelineCLIService(session_factory, fixture_root=FIXTURE_ROOT)
+        service = DatabasePipelineCLIService(
+            session_factory,
+            fixture_root=FIXTURE_ROOT,
+            source_storage_root=tmp_path / "sources",
+        )
         assert await service.load_fixture(MANIFEST) == 1
         async with session_factory() as db:
             announcement = await db.scalar(

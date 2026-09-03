@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -158,3 +160,52 @@ async def test_worker_refuses_to_claim_without_isolation_self_test(queue: JobQue
     queued = await queue.status(job_id=job.id)
     assert queued is not None
     assert queued.status == JobStatus.QUEUED
+
+
+@pytest.mark.asyncio
+async def test_worker_heartbeat_continues_during_long_job_and_is_removed_on_stop(
+    queue: JobQueue, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handler(_payload: dict, _context) -> JobOutcome:
+        started.set()
+        await release.wait()
+        return JobOutcome()
+
+    await queue.enqueue(job_type="long", payload={}, idempotency_key="long")
+    original_record = queue.record_worker_heartbeat
+    original_delete = queue.delete_worker_heartbeat
+    repeated_during_job = asyncio.Event()
+    during_job_calls = 0
+
+    async def tracked_record(*, worker_id: str, isolation_ok: bool, now=None) -> None:
+        nonlocal during_job_calls
+        await original_record(worker_id=worker_id, isolation_ok=isolation_ok, now=now)
+        if started.is_set():
+            during_job_calls += 1
+            if during_job_calls >= 2:
+                repeated_during_job.set()
+
+    record = AsyncMock(side_effect=tracked_record)
+    cleanup = AsyncMock(wraps=original_delete)
+    monkeypatch.setattr(queue, "record_worker_heartbeat", record)
+    monkeypatch.setattr(queue, "delete_worker_heartbeat", cleanup)
+    worker = Worker(
+        worker_id="long-worker",
+        queue=queue,
+        handlers={"long": handler},
+        heartbeat_seconds=0.01,
+        poll_seconds=0.01,
+        isolation_check=_isolation_ok,
+    )
+    worker_task = asyncio.create_task(worker.run_forever())
+    await asyncio.wait_for(started.wait(), timeout=1)
+    await asyncio.wait_for(repeated_during_job.wait(), timeout=1)
+    assert during_job_calls >= 2
+    release.set()
+    await asyncio.sleep(0.02)
+    await worker.stop()
+    await asyncio.wait_for(worker_task, timeout=1)
+    cleanup.assert_awaited()

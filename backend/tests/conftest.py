@@ -12,6 +12,7 @@ from sqlalchemy.pool import NullPool
 from app.auth import create_user
 from app.config import Settings, get_settings
 from app.db import get_db
+from app.health import get_codex_login_status
 from app.main import create_app
 from app.models import Base
 
@@ -57,6 +58,7 @@ def client(session_factory, settings: Settings) -> TestClient:
     app = create_app()
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_codex_login_status] = lambda: True
     with TestClient(app, base_url="http://testserver") as test_client:
         yield test_client
 

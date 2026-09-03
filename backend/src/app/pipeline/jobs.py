@@ -4,10 +4,11 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.enums import JobStatus
+from app.jobs import insert_job_idempotently
 from app.models import Job, WorkerHeartbeat
 
 DEFAULT_LEASE = timedelta(minutes=15)
@@ -44,21 +45,13 @@ class JobQueue:
         max_attempts: int = 3,
     ) -> tuple[Job, bool]:
         async with self._sessions.begin() as session:
-            existing = await session.scalar(
-                select(Job).where(Job.idempotency_key == idempotency_key)
-            )
-            if existing is not None:
-                return existing, False
-            job = Job(
+            return await insert_job_idempotently(
+                session,
                 job_type=job_type,
                 payload=payload,
-                idempotency_key=idempotency_key,
+                key=idempotency_key,
                 max_attempts=max_attempts,
-                status=JobStatus.QUEUED.value,
             )
-            session.add(job)
-            await session.flush()
-            return job, True
 
     async def claim(self, *, owner: str, now: datetime | None = None) -> Job | None:
         now = now or datetime.now(UTC)
@@ -221,3 +214,9 @@ class JobQueue:
             else:
                 heartbeat.heartbeat_at = now
                 heartbeat.isolation_ok = isolation_ok
+
+    async def delete_worker_heartbeat(self, *, worker_id: str) -> None:
+        async with self._sessions.begin() as session:
+            await session.execute(
+                delete(WorkerHeartbeat).where(WorkerHeartbeat.worker_id == worker_id)
+            )

@@ -19,17 +19,18 @@
 
 ```bash
 docker compose up -d db
-cd backend && UV_CACHE_DIR=/tmp/solverthon-uv-cache uv sync --locked
-cd backend && UV_CACHE_DIR=/tmp/solverthon-uv-cache uv run alembic upgrade head
+UV_CACHE_DIR=/tmp/solverthon-uv-cache uv --directory backend sync --locked
+UV_CACHE_DIR=/tmp/solverthon-uv-cache uv --directory backend run alembic upgrade head
 python3 scripts/preflight.py
 ```
 
 API, worker, 프런트는 각각 별도 터미널에서 실행합니다.
 
 ```bash
-cd backend && uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
-cd backend && uv run python -m app.worker
-cd frontend && npm ci && npm run dev
+uv --directory backend run uvicorn app.main:app --host 127.0.0.1 --port 8000
+uv --directory backend run python -m app.worker
+npm --prefix frontend ci
+npm --prefix frontend run dev
 ```
 
 worker는 `.env`, 문서, 원본 저장소를 읽을 수 없는 전용 OS 권한에서 격리 self-test를 통과해야 job을 가져옵니다. 검사 실패를 우회해 운영하지 않습니다.
@@ -50,13 +51,13 @@ uv run python -m app.cli job status --job-id <job-id>
 ## 검증
 
 ```bash
-cd backend && uv run ruff check src tests migrations
-cd backend && uv run ruff format --check src tests migrations
-cd backend && uv run pytest
-cd frontend && npm run lint
-cd frontend && npm run test -- --run
-cd frontend && npm run build
-cd frontend && npm run test:e2e
+uv --directory backend run ruff check src tests migrations
+uv --directory backend run ruff format --check src tests migrations
+uv --directory backend run pytest
+npm --prefix frontend run lint
+npm --prefix frontend run test -- --run
+npm --prefix frontend run build
+npm --prefix frontend run test:e2e
 python3 scripts/check_region_sync.py
 python3 scripts/check_tracked_secrets.py
 git diff --check

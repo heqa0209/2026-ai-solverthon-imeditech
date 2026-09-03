@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "explanation"],
+  "properties": {
+    "status": {"type": "string", "enum": ["PASS", "FAIL", "UNKNOWN"]},
+    "explanation": {"type": "string"}
+  }
+}

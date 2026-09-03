@@ -1,0 +1,1 @@
+Compare only the supplied immutable company profile snapshot with the supplied semantic condition and its verified evidence. Return PASS only for a clear match, FAIL only for a clear contradiction, and UNKNOWN for missing or ambiguous information. Do not infer unstated facts.

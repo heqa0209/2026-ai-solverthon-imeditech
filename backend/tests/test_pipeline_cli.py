@@ -57,6 +57,7 @@ def test_analysis_command_prints_scope_models_and_transmitted_fields() -> None:
     assert "transmitted_fields=companyName" in result.output
     assert "model_efforts=gpt-5.6-luna:medium" in result.output
     assert service.executed == [("announcement.analyze", "announcement-1")]
+    assert "enqueued=1" in result.output
 
 
 def test_scoped_command_does_not_report_zero_as_success() -> None:

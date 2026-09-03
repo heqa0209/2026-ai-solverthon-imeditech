@@ -1,0 +1,142 @@
+{
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source_file_id": {"type": "string"},
+        "source_version": {"type": "string"},
+        "page": {"type": ["integer", "null"]},
+        "verbatim_text": {"type": "string"},
+        "source_priority": {"type": "integer"}
+      },
+      "required": ["source_file_id", "source_version", "page", "verbatim_text", "source_priority"]
+    },
+    "track": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"track_id": {"type": "string"}, "label": {"type": "string"}},
+      "required": ["track_id", "label"]
+    },
+    "role": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"role_key": {"type": "string"}, "label": {"type": "string"}},
+      "required": ["role_key", "label"]
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "group_id": {"type": "string"},
+        "parent_group_id": {"type": ["string", "null"]},
+        "operator": {"enum": ["ALL", "ANY"]},
+        "track_ids": {"type": "array", "items": {"type": "string"}},
+        "role_keys": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["group_id", "parent_group_id", "operator", "track_ids", "role_keys"]
+    },
+    "expected": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"type": {"const": "STRING"}, "value": {"type": "string"}},
+          "required": ["type", "value"]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"type": {"const": "INTEGER"}, "value": {"type": "integer"}},
+          "required": ["type", "value"]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"type": {"const": "DATE"}, "value": {"type": "string", "format": "date"}},
+          "required": ["type", "value"]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"type": {"const": "ENUM"}, "value": {"type": "string"}},
+          "required": ["type", "value"]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"type": {"const": "REGION_SET"}, "value": {"type": "array", "items": {"type": "string"}}},
+          "required": ["type", "value"]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"type": {"const": "STRING_SET"}, "value": {"type": "array", "items": {"type": "string"}}},
+          "required": ["type", "value"]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {"const": "RANGE"},
+            "value": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {"minimum": {"type": ["integer", "null"]}, "maximum": {"type": ["integer", "null"]}},
+              "required": ["minimum", "maximum"]
+            }
+          },
+          "required": ["type", "value"]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {"type": {"const": "BOOLEAN"}, "value": {"type": "boolean"}},
+          "required": ["type", "value"]
+        }
+      ]
+    },
+    "condition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "condition_id": {"type": "string"},
+        "group_id": {"type": "string"},
+        "kind": {"enum": ["MANDATORY", "PREFERENCE", "GUIDANCE", "POST_AWARD"]},
+        "subject": {"enum": ["BUSINESS_ENTITY_TYPE", "ORGANIZATION_TYPE", "COMPANY_SCALE", "FOUNDED_ON", "ELIGIBLE_REGION", "PRIMARY_INDUSTRY", "SECONDARY_INDUSTRY", "ANNUAL_REVENUE", "EMPLOYEE_COUNT", "DELINQUENCY_STATUS", "CERTIFICATION", "SUPPORT_HISTORY", "CAPABILITY_TAG", "OTHER"]},
+        "operator": {"enum": ["EQ", "NE", "IN", "NOT_IN", "LT", "LTE", "GT", "GTE", "BETWEEN", "CONTAINS", "NOT_CONTAINS", "EXISTS", "SEMANTIC_MATCH"]},
+        "expected_value": {"anyOf": [{"$ref": "#/$defs/expected"}, {"type": "null"}]},
+        "unit": {"type": ["string", "null"]},
+        "reference_date": {"type": ["string", "null"], "format": "date"},
+        "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}}
+      },
+      "required": ["condition_id", "group_id", "kind", "subject", "operator", "expected_value", "unit", "reference_date", "evidence"]
+    },
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "question_id": {"type": "string"},
+        "condition_id": {"type": "string"},
+        "prompt": {"type": "string"},
+        "answer_type": {"enum": ["STRING", "INTEGER", "DATE", "BOOLEAN", "STRING_SET"]},
+        "options": {"anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}]},
+        "unit": {"type": ["string", "null"]},
+        "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}}
+      },
+      "required": ["question_id", "condition_id", "prompt", "answer_type", "options", "unit", "evidence"]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "analysis_version": {"type": "string"},
+    "summary": {"type": "string"},
+    "tracks": {"type": "array", "items": {"$ref": "#/$defs/track"}},
+    "roles": {"type": "array", "items": {"$ref": "#/$defs/role"}},
+    "groups": {"type": "array", "items": {"$ref": "#/$defs/group"}},
+    "conditions": {"type": "array", "items": {"$ref": "#/$defs/condition"}},
+    "questions": {"type": "array", "items": {"$ref": "#/$defs/question"}}
+  },
+  "required": ["analysis_version", "summary", "tracks", "roles", "groups", "conditions", "questions"]
+}

@@ -244,7 +244,8 @@ def _evidence(raw: list[dict[str, Any]] | None) -> list[EvidenceView]:
 
 def _safe_source_path(root_value: Path, path_value: str) -> Path | None:
     root = root_value.resolve()
-    path = Path(path_value).resolve()
+    candidate = Path(path_value)
+    path = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
     if not path.is_relative_to(root) or not path.is_file():
         return None
     return path

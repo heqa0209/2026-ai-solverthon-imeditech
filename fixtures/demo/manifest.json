@@ -12,6 +12,14 @@
   "attachments": [],
   "expected_canonical_ir_path": "canonical-ir.json",
   "expected_ai_stages": [
-    "CONDITION_EXTRACTION"
-  ]
+    "CONDITION_EXTRACTION",
+    "USER_EXPLANATION"
+  ],
+  "coverage_matrix": {
+    "native_hwpx": "tests/test_pipeline_extraction.py::test_zip_xml_native_extractors_preserve_filename_location[.hwpx-Contents/section0.xml-<section><text>지역 조건</text></section>-지역 조건]",
+    "native_pdf": "tests/test_pipeline_extraction.py::test_empty_ocr_capable_format_requests_ocr[.pdf]",
+    "mixed_pdf": "tests/test_pipeline_extraction.py::test_partial_pdf_native_text_suppresses_ocr_by_approved_policy",
+    "vision_ocr": "tests/test_pipeline_production_analysis.py::test_ocr_source_is_passed_as_bounded_image_and_stage_matrix_is_persisted",
+    "limit_exceeded": "tests/test_pipeline_attachments.py::test_attachment_size_limits"
+  }
 }

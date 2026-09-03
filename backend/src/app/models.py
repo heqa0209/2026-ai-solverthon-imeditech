@@ -91,6 +91,17 @@ class Announcement(Base, TimestampMixin):
     source_available: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class CollectionSnapshot(Base):
+    __tablename__ = "collection_snapshots"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    scope: Mapped[str] = mapped_column(String(16), index=True)
+    source_ids: Mapped[list] = mapped_column(JSON)
+    complete: Mapped[bool] = mapped_column(Boolean, default=False)
+    succeeded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, index=True
+    )
+
+
 class AnnouncementVersion(Base):
     __tablename__ = "announcement_versions"
     __table_args__ = (
@@ -148,6 +159,9 @@ class AIStageRun(Base):
     __tablename__ = "ai_stage_runs"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     analysis_run_id: Mapped[str] = mapped_column(ForeignKey("analysis_runs.id"), index=True)
+    company_profile_version_id: Mapped[str | None] = mapped_column(
+        ForeignKey("company_profile_versions.id"), index=True
+    )
     stage: Mapped[str] = mapped_column(String(64))
     model: Mapped[str] = mapped_column(String(64))
     effort: Mapped[str] = mapped_column(String(16))

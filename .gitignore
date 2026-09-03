@@ -24,6 +24,7 @@ frontend/dist/
 frontend/playwright-report/
 frontend/test-results/
 coverage/
+*.tsbuildinfo
 
 # Runtime data and secrets
 storage/

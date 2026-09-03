@@ -319,21 +319,19 @@ class ProductionAnnouncementAnalyzer:
                 },
             )
             stages.append(condition_stage)
+            validated_sources = [
+                EvidenceSource(
+                    source_file_id=item.source.source_file_id,
+                    source_version=item.source.sha256 or "",
+                    text=item.text,
+                    pages=item.pages,
+                )
+                for item in source_analyses
+                if item.text
+            ]
             try:
                 canonical_ir = CanonicalIR.model_validate(condition_stage.output)
-                validate_evidence(
-                    canonical_ir,
-                    [
-                        EvidenceSource(
-                            source_file_id=item.source.source_file_id,
-                            source_version=item.source.sha256 or "",
-                            text=item.text,
-                            pages=item.pages,
-                        )
-                        for item in source_analyses
-                        if item.text
-                    ],
-                )
+                validate_evidence(canonical_ir, validated_sources)
             except ValueError as exc:
                 raise AIExecutionError(
                     "CANONICAL_IR_INVALID",
@@ -447,6 +445,11 @@ class ProductionAnnouncementAnalyzer:
                                 for key, value in semantic_evaluations.items()
                             },
                             "ocr_condition_ids": sorted(ocr_condition_ids),
+                            "conditions": [
+                                condition.model_dump(mode="json")
+                                for condition in canonical_ir.conditions
+                                if condition.condition_id in ai_dependent_ids
+                            ],
                         },
                         company_profile_version_id=profile.version_id,
                     )
@@ -474,6 +477,7 @@ class ProductionAnnouncementAnalyzer:
                                 correction_valid = False
                         if not correction_valid:
                             profile_safety_unknown_ids.update(ai_dependent_ids)
+                        validate_evidence(canonical_ir, validated_sources)
                     elif validation_result != "ACCEPT":
                         profile_safety_unknown_ids.update(ai_dependent_ids)
                     calculated = evaluate_decision(

@@ -5,6 +5,8 @@
 .ouroboros/
 graphify-out/
 .worktrees/
+.vercel/
+.cloudflared/
 
 # Python
 __pycache__/
@@ -31,6 +33,7 @@ storage/
 runtime/
 tmp/
 *.pid
+*.log
 infra/cloudflared/config.local.yml
 infra/cloudflared/*.json
 

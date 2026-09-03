@@ -146,7 +146,7 @@ async def list_announcements(
     eligibility: Verdict | None = None,
     recruitmentStatus: Annotated[str | None, Query(pattern="^(OPEN|CLOSED|UNKNOWN)$")] = None,
     interestStatus: Annotated[
-        str | None, Query(pattern="^(INTERESTED|ON_HOLD|NOT_INTERESTED|UNSET)$")
+        str | None, Query(pattern="^(INTERESTED|ON_HOLD|NOT_INTERESTED|UNSET|ANY_SET)$")
     ] = None,
 ) -> AnnouncementPage:
     current_profile = await _current_profile(db, auth.user.id)
@@ -204,6 +204,7 @@ async def list_announcements(
             item
             for item in items
             if (interestStatus == "UNSET" and item.interestStatus is None)
+            or (interestStatus == "ANY_SET" and item.interestStatus is not None)
             or item.interestStatus == interestStatus
         ]
 

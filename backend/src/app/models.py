@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import (
     JSON,
@@ -23,14 +23,20 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 
+def utc_now() -> datetime:
+    # SQLAlchemy's SQLite test dialect does not preserve timezone offsets.
+    # Store a UTC wall-clock value consistently across SQLite and PostgreSQL.
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
 class Base(DeclarativeBase):
     pass
 
 
 class TimestampMixin:
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
 
@@ -59,7 +65,7 @@ class LoginAttempt(Base):
     ip_address: Mapped[str] = mapped_column(String(64), index=True)
     succeeded: Mapped[bool] = mapped_column(Boolean, default=False)
     attempted_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, index=True
+        DateTime(timezone=True), default=utc_now, index=True
     )
 
 
@@ -79,7 +85,7 @@ class CompanyProfileVersion(Base):
     version: Mapped[int] = mapped_column(Integer)
     snapshot: Mapped[dict] = mapped_column(JSON)
     raw_input: Mapped[dict] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class Announcement(Base, TimestampMixin):
@@ -98,7 +104,7 @@ class CollectionSnapshot(Base):
     source_ids: Mapped[list] = mapped_column(JSON)
     complete: Mapped[bool] = mapped_column(Boolean, default=False)
     succeeded_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, index=True
+        DateTime(timezone=True), default=utc_now, index=True
     )
 
 
@@ -118,7 +124,7 @@ class AnnouncementVersion(Base):
     published_on: Mapped[date | None] = mapped_column(Date)
     recruitment_starts_on: Mapped[date | None] = mapped_column(Date)
     recruitment_ends_on: Mapped[date | None] = mapped_column(Date, index=True)
-    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class SourceFile(Base):
@@ -224,7 +230,7 @@ class EligibilityDecision(Base):
     explanation: Mapped[str | None] = mapped_column(Text)
     passed_track_key: Mapped[str | None] = mapped_column(String(100))
     is_current: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class ConditionResult(Base):
@@ -255,7 +261,7 @@ class AnnouncementRoleSelection(Base):
     announcement_id: Mapped[str] = mapped_column(ForeignKey("announcements.id"), index=True)
     announcement_version_id: Mapped[str] = mapped_column(ForeignKey("announcement_versions.id"))
     role_key: Mapped[str | None] = mapped_column(String(100))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class AnnouncementAnswer(Base):
@@ -269,7 +275,7 @@ class AnnouncementAnswer(Base):
     value: Mapped[dict] = mapped_column(JSON)
     source: Mapped[str] = mapped_column(String(32))
     memo: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class Job(Base, TimestampMixin):
@@ -282,7 +288,7 @@ class Job(Base, TimestampMixin):
     attempt: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
     available_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=datetime.utcnow, index=True
+        DateTime(timezone=True), default=utc_now, index=True
     )
     lease_owner: Mapped[str | None] = mapped_column(String(100))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
@@ -294,5 +300,5 @@ class Job(Base, TimestampMixin):
 class WorkerHeartbeat(Base):
     __tablename__ = "worker_heartbeats"
     worker_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     isolation_ok: Mapped[bool] = mapped_column(Boolean, default=False)

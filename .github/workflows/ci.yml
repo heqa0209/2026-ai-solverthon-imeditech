@@ -65,6 +65,54 @@ jobs:
       - run: npm run test:e2e
         working-directory: frontend
 
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: solverthon_e2e
+          POSTGRES_USER: solverthon
+          POSTGRES_PASSWORD: solverthon
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U solverthon -d solverthon_e2e"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://solverthon:solverthon@127.0.0.1:5432/solverthon_e2e
+      APP_ORIGIN: http://127.0.0.1:4173
+      SESSION_SECRET: test-session-secret-change-me-32-bytes
+      SESSION_COOKIE_SECURE: "false"
+      BIZINFO_API_KEY: fixture-key
+      INTEGRATION_E2E: "1"
+      E2E_START_BACKEND: "1"
+      E2E_BASE_URL: http://127.0.0.1:4173
+      E2E_USERNAME: e2e.user
+      E2E_PASSWORD: test-only-browser-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: uv sync --locked
+        working-directory: backend
+      - run: uv run alembic upgrade head
+        working-directory: backend
+      - run: npm ci
+        working-directory: frontend
+      - run: npx playwright install --with-deps chrome
+        working-directory: frontend
+      - run: npm run test:e2e:integration
+        working-directory: frontend
+
   contracts:
     runs-on: ubuntu-latest
     steps:

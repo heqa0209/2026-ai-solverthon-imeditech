@@ -12,18 +12,19 @@ jobs:
       postgres:
         image: postgres:17-alpine
         env:
-          POSTGRES_DB: solverthon
+          POSTGRES_DB: solverthon_pipeline_test
           POSTGRES_USER: solverthon
           POSTGRES_PASSWORD: solverthon
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U solverthon -d solverthon"
+          --health-cmd "pg_isready -U solverthon -d solverthon_pipeline_test"
           --health-interval 2s
           --health-timeout 3s
           --health-retries 20
     env:
-      DATABASE_URL: postgresql+asyncpg://solverthon:solverthon@127.0.0.1:5432/solverthon
+      DATABASE_URL: postgresql+asyncpg://solverthon:solverthon@127.0.0.1:5432/solverthon_pipeline_test
+      TEST_POSTGRES_URL: postgresql+asyncpg://solverthon:solverthon@127.0.0.1:5432/solverthon_pipeline_test
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6

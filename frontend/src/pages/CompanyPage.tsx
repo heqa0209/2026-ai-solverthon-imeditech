@@ -22,6 +22,7 @@ function toDraft(profile: CompanyProfileView | null): Draft {
 }
 
 function digits(value: string) { return value.replace(/[^0-9]/g, ""); }
+const MAX_SAFE_REVENUE = BigInt(Number.MAX_SAFE_INTEGER);
 
 export function validateCompany(draft: Draft): Errors {
   const errors: Errors = {};
@@ -33,7 +34,11 @@ export function validateCompany(draft: Draft): Errors {
     const selected = new Date(`${draft.foundedOn}T00:00:00`);
     if (Number.isNaN(selected.getTime()) || selected > today) errors.foundedOn = "설립일은 오늘보다 늦을 수 없습니다.";
   }
-  if (draft.annualRevenue && BigInt(digits(draft.annualRevenue) || "0") > 100000000000000000n) errors.annualRevenue = "매출액이 허용 범위를 넘었습니다.";
+  if (draft.annualRevenue) {
+    const revenue = BigInt(digits(draft.annualRevenue) || "0");
+    if (revenue > 100000000000000000n) errors.annualRevenue = "매출액이 허용 범위를 넘었습니다.";
+    else if (revenue > MAX_SAFE_REVENUE) errors.annualRevenue = "브라우저에서 정확하게 처리할 수 있는 범위(9,007,199,254,740,991원) 이하로 입력해 주세요.";
+  }
   if (draft.employeeCount && Number(draft.employeeCount) > 10_000_000) errors.employeeCount = "상시근로자 수가 허용 범위를 넘었습니다.";
   if ((draft.primaryIndustry?.trim().length || 0) > 100) errors.primaryIndustry = "주업종은 100자 이하여야 합니다.";
   if (draft.eligibleRegions.length > 50) errors.eligibleRegions = "적용 가능 지역을 더 이상 추가할 수 없습니다.";
@@ -48,12 +53,14 @@ export function validateCompany(draft: Draft): Errors {
 }
 
 export function buildCompanyInput(draft: Draft): CompanyProfileInput {
+  const revenueDigits = digits(draft.annualRevenue);
+  if (revenueDigits && BigInt(revenueDigits) > MAX_SAFE_REVENUE) throw new RangeError("annualRevenue exceeds JavaScript safe integer range");
   return {
     companyName: draft.companyName.trim(), businessEntityType: draft.businessEntityType, organizationType: draft.organizationType,
     companyScale: draft.companyScale, foundedOn: draft.foundedOn || null,
     eligibleRegions: draft.eligibleRegions.map(({ code, name }) => ({ code, name })),
     primaryIndustry: draft.primaryIndustry?.trim() || null, secondaryIndustries: [...draft.secondaryIndustries],
-    annualRevenue: draft.annualRevenue ? Number(digits(draft.annualRevenue)) : null,
+    annualRevenue: revenueDigits ? Number(revenueDigits) : null,
     employeeCount: draft.employeeCount ? Number(digits(draft.employeeCount)) : null,
     delinquencyStatus: draft.delinquencyStatus, certifications: [...draft.certifications],
     supportHistory: draft.supportHistory.map(({ programName, year }) => ({ programName: programName.trim(), year })),

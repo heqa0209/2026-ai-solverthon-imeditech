@@ -7,5 +7,5 @@
     "moduleResolution": "Bundler",
     "allowImportingTsExtensions": true
   },
-  "include": ["vite.config.ts", "eslint.config.js", "playwright.config.ts"]
+  "include": ["vite.config.ts", "eslint.config.js", "playwright.config.ts", "playwright.integration.config.ts"]
 }

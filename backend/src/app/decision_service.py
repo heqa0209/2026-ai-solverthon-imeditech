@@ -20,9 +20,7 @@ from app.models import (
 
 
 def _decision_lock_key(user_id: str, announcement_id: str) -> int:
-    digest = hashlib.blake2b(
-        f"{user_id}\0{announcement_id}".encode(), digest_size=8
-    ).digest()
+    digest = hashlib.blake2b(f"{user_id}\0{announcement_id}".encode(), digest_size=8).digest()
     return int.from_bytes(digest, byteorder="big", signed=True)
 
 

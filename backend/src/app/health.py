@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import os
 import shutil
+import subprocess
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -15,6 +18,7 @@ from app.models import WorkerHeartbeat
 from app.schemas import HealthResponse, ReadinessCheck, ReadinessResponse
 
 router = APIRouter(prefix="/api/v1", tags=["health"])
+CODEX_LOGIN_TIMEOUT_SECONDS = 5.0
 
 
 def _age(value: datetime) -> timedelta:
@@ -28,10 +32,40 @@ async def liveness() -> HealthResponse:
     return HealthResponse()
 
 
+async def _codex_login_status(timeout_seconds: float = CODEX_LOGIN_TIMEOUT_SECONDS) -> bool:
+    executable = shutil.which("codex")
+    if executable is None:
+        return False
+    try:
+        process = await asyncio.create_subprocess_exec(
+            executable,
+            "login",
+            "status",
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return False
+    try:
+        return await asyncio.wait_for(process.wait(), timeout=timeout_seconds) == 0
+    except TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(process.wait(), timeout=1)
+        return False
+
+
+async def get_codex_login_status() -> bool:
+    return await _codex_login_status()
+
+
 @router.get("/ops/health/ready", response_model=ReadinessResponse)
 async def readiness(
     db: Annotated[AsyncSession, Depends(get_db)],
     settings: Annotated[Settings, Depends(get_settings)],
+    codex_login_ok: Annotated[bool, Depends(get_codex_login_status)],
 ) -> ReadinessResponse:
     checks: dict[str, ReadinessCheck] = {}
     try:
@@ -51,8 +85,8 @@ async def readiness(
         detail=None if settings.bizinfo_api_key else "credential missing",
     )
     checks["codexCli"] = ReadinessCheck(
-        status="ok" if shutil.which("codex") else "error",
-        detail=None if shutil.which("codex") else "Codex CLI unavailable",
+        status="ok" if codex_login_ok else "error",
+        detail=None if codex_login_ok else "Codex login unavailable",
     )
     try:
         heartbeat = await db.scalar(

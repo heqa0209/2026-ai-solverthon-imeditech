@@ -59,6 +59,7 @@ class Worker:
         self.isolation_check = isolation_check
         self._stopping = asyncio.Event()
         self._tasks: set[asyncio.Task[None]] = set()
+        self._worker_heartbeat_task: asyncio.Task[None] | None = None
         self._isolation_ok = False
 
     @property
@@ -83,6 +84,24 @@ class Worker:
                 context.lease_lost.set()
                 await context.supervisor.terminate_all()
                 return
+
+    async def _worker_heartbeat(self) -> None:
+        while not self._stopping.is_set():
+            await self.queue.record_worker_heartbeat(
+                worker_id=self.worker_id,
+                isolation_ok=self._isolation_ok,
+            )
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stopping.wait(), timeout=self.heartbeat_seconds)
+
+    async def _cleanup_worker_heartbeat(self) -> None:
+        heartbeat = self._worker_heartbeat_task
+        self._worker_heartbeat_task = None
+        if heartbeat is not None:
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat
+        await self.queue.delete_worker_heartbeat(worker_id=self.worker_id)
 
     async def _execute(self, job: Job) -> None:
         context = JobContext(job.id, self.worker_id, self.queue)
@@ -168,11 +187,17 @@ class Worker:
         return len(claimed)
 
     async def run_forever(self) -> None:
-        while not self._stopping.is_set():
-            started = await self.run_once()
-            if started == 0:
-                with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(self._stopping.wait(), timeout=self.poll_seconds)
+        if not self._isolation_ok:
+            await self.ensure_ready()
+        self._worker_heartbeat_task = asyncio.create_task(self._worker_heartbeat())
+        try:
+            while not self._stopping.is_set():
+                started = await self.run_once()
+                if started == 0:
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(self._stopping.wait(), timeout=self.poll_seconds)
+        finally:
+            await self._cleanup_worker_heartbeat()
 
     async def stop(self) -> None:
         self._stopping.set()
@@ -180,3 +205,4 @@ class Worker:
             task.cancel()
         if self._tasks:
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
+        await self._cleanup_worker_heartbeat()

@@ -170,6 +170,7 @@ def test_list_detail_interest_and_attachment_authorization(
     assert body["conditions"][0]["evidence"][0]["verbatimText"] == "소기업이어야 합니다."
     assert body["files"][0]["failureCode"] == "FIXTURE_NOT_DOWNLOADED"
     assert body["rolePredictions"][0]["roleKey"] == "LEAD"
+    assert client.get("/api/v1/announcements?interestStatus=ANY_SET").json()["total"] == 0
 
     interested = client.put(
         f"/api/v1/announcements/{seeded['announcement']}/interest",
@@ -180,6 +181,9 @@ def test_list_detail_interest_and_attachment_authorization(
     assert interested.json()["status"] == "INTERESTED"
     filtered = client.get("/api/v1/announcements?interestStatus=INTERESTED")
     assert filtered.json()["total"] == 1
+    any_configured = client.get("/api/v1/announcements?interestStatus=ANY_SET")
+    assert any_configured.status_code == 200
+    assert any_configured.json()["total"] == 1
     missing_file = client.get(
         f"/api/v1/announcements/{seeded['announcement']}/files/{seeded['file']}"
     )

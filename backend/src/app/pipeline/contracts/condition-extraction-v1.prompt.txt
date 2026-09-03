@@ -1,0 +1,1 @@
+Extract only administrative eligibility conditions from the supplied source text. Preserve exact source_file_id, source_version, page, and verbatim_text evidence. Return one Canonical IR object and do not infer unsupported facts.

@@ -211,6 +211,7 @@ def evaluate_decision(
     profile: dict[str, Any],
     selected_role_key: str | None = None,
     condition_values: dict[str, object] | None = None,
+    semantic_evaluations: dict[str, Evaluation] | None = None,
 ) -> DecisionEvaluation:
     conditions = [item for item in canonical_ir.get("conditions", []) if isinstance(item, dict)]
     mandatory = [item for item in conditions if item.get("kind") == "MANDATORY"]
@@ -262,7 +263,15 @@ def evaluate_decision(
             field = PROFILE_FIELDS.get(str(condition.get("subject", "OTHER")))
             if field:
                 condition_profile = {**profile, field: condition_values[condition_id]}
-        evaluations[condition_id] = evaluate_condition(condition_profile, condition)
+        deterministic = evaluate_condition(condition_profile, condition)
+        if (
+            str(condition.get("operator", "")) == "SEMANTIC_MATCH"
+            and semantic_evaluations
+            and condition_id in semantic_evaluations
+        ):
+            evaluations[condition_id] = semantic_evaluations[condition_id]
+        else:
+            evaluations[condition_id] = deterministic
         applicable_conditions.append(condition)
 
     condition_groups: dict[str, list[ConditionStatus]] = {}

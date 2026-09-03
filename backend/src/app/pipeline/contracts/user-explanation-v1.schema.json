@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["explanation"],
+  "properties": {
+    "explanation": {"type": "string"}
+  }
+}

@@ -1,0 +1,1 @@
+Explain the supplied rules-owned verdict in concise Korean using only the supplied condition results and verified evidence. Do not recommend the program or predict selection chances. Do not change the verdict.

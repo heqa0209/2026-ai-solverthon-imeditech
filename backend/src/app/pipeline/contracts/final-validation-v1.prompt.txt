@@ -1,0 +1,1 @@
+Validate whether the supplied semantic or OCR-dependent judgment is fully supported by the supplied bounded inputs. This validation cannot change deterministic Python comparisons. Set accepted to false whenever the evidence is incomplete, ambiguous, or unsupported.

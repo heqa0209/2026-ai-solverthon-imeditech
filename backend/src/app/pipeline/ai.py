@@ -118,6 +118,7 @@ def build_codex_invocation(
     output_path: Path,
     instruction: str,
     structured_input: Mapping[str, Any],
+    image_paths: tuple[Path, ...] = (),
     source_env: Mapping[str, str] | None = None,
 ) -> CodexInvocation:
     resolved_temp = temp_dir.resolve()
@@ -131,6 +132,11 @@ def build_codex_invocation(
     if not isinstance(schema, dict):
         raise ValueError("Output schema must be a JSON object")
     assert_closed_json_schema(schema)
+    resolved_images = tuple(path.resolve() for path in image_paths)
+    if any(
+        not path.is_relative_to(resolved_temp) or not path.is_file() for path in resolved_images
+    ):
+        raise ValueError("Image inputs must be files inside the job temp directory")
     policy = AI_STAGE_POLICIES[stage]
     stdin = build_stage_prompt(instruction, structured_input)
     env_source = os.environ if source_env is None else source_env
@@ -139,6 +145,7 @@ def build_codex_invocation(
     disabled_feature_args = tuple(
         argument for feature in _DISABLED_CODEX_FEATURES for argument in ("--disable", feature)
     )
+    image_args = tuple(argument for path in resolved_images for argument in ("--image", str(path)))
     args = (
         "codex",
         "exec",
@@ -146,6 +153,7 @@ def build_codex_invocation(
         "--ignore-rules",
         "--strict-config",
         *disabled_feature_args,
+        *image_args,
         "--sandbox",
         "read-only",
         "--cd",

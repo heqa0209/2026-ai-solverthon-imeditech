@@ -27,6 +27,7 @@ async def publish_deterministic_decision(
     analysis_run_id: str,
     selected_role_key: str | None,
     explanation: str | None = None,
+    semantic_evaluations: dict[str, Evaluation] | None = None,
 ) -> EligibilityDecision:
     """Compute and atomically publish a rules-owned eligibility decision.
 
@@ -74,6 +75,7 @@ async def publish_deterministic_decision(
         profile,
         selected_role_key,
         condition_values=condition_values,
+        semantic_evaluations=semantic_evaluations,
     )
 
     await db.execute(
